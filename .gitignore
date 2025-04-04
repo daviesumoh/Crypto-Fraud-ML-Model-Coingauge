@@ -1,0 +1,23 @@
+# Rust
+/target/
+Cargo.lock
+
+# Runtime & local state
+/data/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+ml/.venv/
+
+# Node & Next.js
+web/node_modules/
+web/.next/
+
+# Environment and Secrets
+.env
+.env.*
+env/.env
+!env/.env.example
+.DS_Store
