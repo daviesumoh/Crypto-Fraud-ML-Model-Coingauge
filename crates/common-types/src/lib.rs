@@ -83,3 +83,47 @@ pub struct CanonicalTransaction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CallType {
+    Call,
+    DelegateCall,
+    StaticCall,
+    CallCode,
+    Create,
+    Create2,
+    SelfDestruct,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalCallTrace {
+    pub depth: u16,
+    pub call_type: CallType,
+    pub caller: String,
+    pub target: String,
+    pub value_wei: u128,
+    pub selector: String,
+    pub reverted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AssetStandard {
+    Native,
+    Erc20,
+    Erc721,
+    Erc1155,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetMovement {
+    pub asset_standard: AssetStandard,
+    pub token_address: String,
+    pub token_symbol: Option<String>,
+    pub from_address: String,
+    pub to_address: String,
+    pub raw_amount: u128,
+    pub amount_usd: f64,
+    pub recipient_post_balance_usd: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
