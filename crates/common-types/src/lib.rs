@@ -127,3 +127,38 @@ pub struct AssetMovement {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PermissionKind {
+    Erc20Approve,
+    IncreaseAllowance,
+    ApprovalForAll,
+    Eip2612Permit,
+    UniswapPermit2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionMutation {
+    pub kind: PermissionKind,
+    pub owner: String,
+    pub spender: String,
+    pub token_address: String,
+    pub is_unlimited: bool,
+    pub allowance_usd: f64,
+    pub expiration_sec: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractArtifact {
+    pub chain_id: u64,
+    pub address: String,
+    pub bytecode_hash: String,
+    pub deployer: String,
+    pub age_hours: f64,
+    pub is_eoa: bool,
+    pub is_verified: bool,
+    pub deployed_via_create2: bool,
+    pub factory_has_selfdestruct_history: bool,
+    pub is_whitelisted_proxy_target: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
