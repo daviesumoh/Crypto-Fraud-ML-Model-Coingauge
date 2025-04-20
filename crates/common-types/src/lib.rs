@@ -162,3 +162,43 @@ pub struct ContractArtifact {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum EntityCategory {
+    Sanctioned,
+    WalletDrainer,
+    Exploiter,
+    Mixer,
+    Phishing,
+    HoneypotToken,
+    SybilCluster,
+    CexOmnibus,
+    CanonicalBridge,
+    DexPool,
+    VerifiedProtocol,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityLabel {
+    pub address: String,
+    pub entity_name: String,
+    pub category: EntityCategory,
+    pub source_feed: String,
+    pub severity_weight: f64,
+    pub is_omnibus_sink: bool,
+    pub is_sanctioned: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SimulationResult {
+    pub success: bool,
+    pub revert_reason: Option<String>,
+    pub gas_used: u64,
+    pub internal_traces: Vec<InternalCallTrace>,
+    pub asset_movements: Vec<AssetMovement>,
+    pub permission_mutations: Vec<PermissionMutation>,
+    pub env_evasion_opcode_detected: bool,
+    pub honeypot_sell_reverted: bool,
+    pub observed_sell_tax_pct: f64,
+    pub simulation_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
