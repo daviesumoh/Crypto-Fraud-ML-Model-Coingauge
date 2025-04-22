@@ -223,3 +223,68 @@ pub struct WalletHistoryContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Severity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Severity {
+    pub fn weight(&self) -> f64 {
+        match self {
+            Self::Low => 0.20,
+            Self::Medium => 0.45,
+            Self::High => 0.85,
+            Self::Critical => 1.60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeuristicFinding {
+    pub rule_id: String,
+    pub rule_version: String,
+    pub title: String,
+    pub severity: Severity,
+    pub triggers_critical_veto: bool,
+    pub description: String,
+    pub evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShapAttribution {
+    pub feature_name: String,
+    pub feature_value: f64,
+    pub shap_impact: f64,
+    pub direction: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPredictionBundle {
+    pub anomaly_score: f64,
+    pub supervised_fraud_prob: f64,
+    #[serde(default, alias = "gnn_cluster_prob")]
+    pub bytecode_risk_score: f64,
+    pub nearest_bytecode_family: Option<String>,
+    pub bytecode_similarity: Option<f64>,
+    pub top_shap_features: Vec<ShapAttribution>,
+    pub inference_latency_ms: f64,
+}
+
+impl Default for ModelPredictionBundle {
+    fn default() -> Self {
+        Self {
+            anomaly_score: 0.04,
+            supervised_fraud_prob: 0.02,
+            bytecode_risk_score: 0.0,
+            nearest_bytecode_family: None,
+            bytecode_similarity: None,
+            top_shap_features: Vec::new(),
+            inference_latency_ms: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
