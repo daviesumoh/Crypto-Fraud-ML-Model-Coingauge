@@ -202,3 +202,24 @@ pub struct SimulationResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphTransferEdge {
+    pub tx_hash: String,
+    pub from: String,
+    pub to: String,
+    pub amount_usd: f64,
+    pub recipient_post_balance_usd: f64,
+    pub timestamp_sec: u64,
+    pub selector: String,
+    pub recipient_is_fresh_nonce_zero: bool,
+    pub recipient_has_outbound_cospend: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WalletHistoryContext {
+    pub total_tx_count: u64,
+    pub frequent_counterparties: Vec<String>,
+    pub prior_zero_or_dust_senders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
