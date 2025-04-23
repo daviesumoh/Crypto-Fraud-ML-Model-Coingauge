@@ -326,3 +326,76 @@ pub struct EnsembleBreakdown {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompositeRiskReport {
+    pub evaluation_id: Uuid,
+    pub evaluated_at: DateTime<Utc>,
+    pub evaluation_mode: String,
+    pub chain_id: u64,
+    #[serde(default)]
+    pub block_number: Option<u64>,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+    #[serde(default)]
+    pub method_selector: Option<String>,
+    #[serde(default)]
+    pub decoded_function: Option<String>,
+    #[serde(default)]
+    pub tx_value_native: Option<f64>,
+    #[serde(default)]
+    pub tx_value_usd: Option<f64>,
+    #[serde(default)]
+    pub gas_price_gwei: Option<f64>,
+    pub subject_address: String,
+    #[serde(default)]
+    pub subject_label: Option<String>,
+    pub counterparty_address: Option<String>,
+    #[serde(default)]
+    pub counterparty_label: Option<String>,
+    pub risk_score: u8,
+    pub risk_tier: RiskTier,
+    pub confidence_score: f64,
+    pub policy_action: PolicyAction,
+    pub ensemble_breakdown: EnsembleBreakdown,
+    pub heuristic_findings: Vec<HeuristicFinding>,
+    pub simulation_summary: Option<SimulationResult>,
+    pub ml_predictions: ModelPredictionBundle,
+    pub forensic_brief: Option<ForensicBrief>,
+    pub total_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluateTransactionRequest {
+    pub transaction: CanonicalTransaction,
+    #[serde(default)]
+    pub wallet_history: WalletHistoryContext,
+    #[serde(default)]
+    pub recent_graph_edges: Vec<GraphTransferEdge>,
+    #[serde(default)]
+    pub contract_artifacts: Vec<ContractArtifact>,
+    #[serde(default)]
+    pub entity_labels: Vec<EntityLabel>,
+    #[serde(default)]
+    pub untrusted_metadata_note: Option<String>,
+    #[serde(default)]
+    pub mock_simulation_override: Option<SimulationResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluateWalletRequest {
+    pub chain_id: u64,
+    pub wallet_address: String,
+    pub current_timestamp_sec: u64,
+    #[serde(default)]
+    pub wallet_history: WalletHistoryContext,
+    #[serde(default)]
+    pub recent_transactions: Vec<CanonicalTransaction>,
+    #[serde(default)]
+    pub graph_edges: Vec<GraphTransferEdge>,
+    #[serde(default)]
+    pub contract_artifacts: Vec<ContractArtifact>,
+    #[serde(default)]
+    pub entity_labels: Vec<EntityLabel>,
+    #[serde(default)]
+    pub target_bytecode_hex: Option<String>,
+}
+
