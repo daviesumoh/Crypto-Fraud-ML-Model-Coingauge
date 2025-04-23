@@ -288,3 +288,41 @@ impl Default for ModelPredictionBundle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RiskTier {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PolicyAction {
+    Allow,
+    Warn,
+    Hold,
+    Block,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicBrief {
+    pub executive_summary: String,
+    pub technical_forensics: String,
+    pub recommended_action: String,
+    pub evidence_citations: Vec<String>,
+    pub prompt_injection_sanitized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsembleBreakdown {
+    pub heuristic_signal: f64,
+    pub taint_exposure_signal: f64,
+    pub supervised_ml_signal: f64,
+    pub bytecode_risk_signal: f64,
+    pub anomaly_signal: f64,
+    pub raw_ensemble_score: f64,
+    pub calibrated_probability: f64,
+    pub critical_veto_applied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
