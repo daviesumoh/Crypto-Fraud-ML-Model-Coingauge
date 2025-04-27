@@ -399,3 +399,28 @@ pub struct EvaluateWalletRequest {
     pub target_bytecode_hex: Option<String>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_standard_checksummed_and_lowercase_addresses() {
+        let valid = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+        let res = validate_and_normalize_address(valid).unwrap();
+        assert_eq!(res, "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
+
+        let without_prefix = "d8da6bf26964af9d7eed9e03e53415d37aa96045";
+        assert_eq!(
+            validate_and_normalize_address(without_prefix).unwrap(),
+            "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_non_hex_addresses() {
+        assert!(validate_and_normalize_address("0x123").is_err());
+        assert!(validate_and_normalize_address("0xd8da6bf26964af9d7eed9e03e53415d37aa9604").is_err()); // 39 chars
+        assert!(validate_and_normalize_address("0xd8da6bf26964af9d7eed9e03e53415d37aa96045ff").is_err()); // 42 chars
+        assert!(validate_and_normalize_address("0xzzzz6bf26964af9d7eed9e03e53415d37aa96045").is_err()); // non-hex
+    }
+}
