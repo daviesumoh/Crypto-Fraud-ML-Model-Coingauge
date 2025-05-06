@@ -56,3 +56,28 @@ pub mod topics {
 }
 
 #[derive(Debug, Error)]
+pub enum SimulatorError {
+    #[error("invalid EVM hex string `{0}`")]
+    InvalidHex(String),
+    #[error("EVM execution error: {0}")]
+    ExecutionFailed(String),
+}
+
+/// Seeded account state (fetched via read-through Redis / Managed RPC cache).
+#[derive(Debug, Clone, Default)]
+pub struct SeededAccount {
+    pub balance_wei: u128,
+    pub nonce: u64,
+    pub bytecode_hex: Option<String>,
+    pub storage_slots: HashMap<U256, U256>,
+}
+
+/// Provider trait for on-demand state forking against live JSON-RPC (Alchemy / QuickNode).
+pub trait ForkStateProvider: Send + Sync {
+    fn fetch_code(&self, address: &str) -> Option<String>;
+    fn fetch_balance(&self, address: &str) -> Option<u128>;
+    fn fetch_storage(&self, address: &str, slot_hex: &str) -> Option<String>;
+}
+
+/// Custom `revm::Inspector` recording internal call frames and simulation-evasion opcodes.
+#[derive(Debug, Default)]
