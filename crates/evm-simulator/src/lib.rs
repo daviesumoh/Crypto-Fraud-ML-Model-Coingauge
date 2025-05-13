@@ -81,3 +81,25 @@ pub trait ForkStateProvider: Send + Sync {
 
 /// Custom `revm::Inspector` recording internal call frames and simulation-evasion opcodes.
 #[derive(Debug, Default)]
+struct SecurityInspector {
+    traces: Vec<InternalCallTrace>,
+    saw_env_inspection_opcode: bool,
+    saw_conditional_jump_after_env: bool,
+    env_evasion_branch_to_call: bool,
+}
+
+impl<DB: Database> Inspector<DB> for SecurityInspector {
+    fn step(&mut self, interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
+        let op = interp.current_opcode();
+        // 0x3a = GASPRICE, 0x41 = COINBASE, 0x44 = PREVRANDAO / DIFFICULTY
+        if matches!(op, 0x3a | 0x41 | 0x44) {
+            self.saw_env_inspection_opcode = true;
+        } else if op == 0x57 && self.saw_env_inspection_opcode {
+            // 0x57 = JUMPI conditional branch following environment inspection
+            self.saw_conditional_jump_after_env = true;
+        } else if matches!(op, 0xf1 | 0xf2 | 0xf4 | 0xfa) && self.saw_conditional_jump_after_env {
+            // External CALL / CALLCODE / DELEGATECALL / STATICCALL gated on block env branch
+            self.env_evasion_branch_to_call = true;
+        }
+    }
+
