@@ -103,3 +103,40 @@ impl<DB: Database> Inspector<DB> for SecurityInspector {
         }
     }
 
+    fn call(
+        &mut self,
+        context: &mut EvmContext<DB>,
+        inputs: &mut CallInputs,
+    ) -> Option<CallOutcome> {
+        let depth = context.journaled_state.depth() as u16;
+        let call_type = match inputs.scheme {
+            CallScheme::Call => CallType::Call,
+            CallScheme::CallCode => CallType::CallCode,
+            CallScheme::DelegateCall => CallType::DelegateCall,
+            CallScheme::StaticCall => CallType::StaticCall,
+            CallScheme::ExtCall
+            | CallScheme::ExtStaticCall
+            | CallScheme::ExtDelegateCall => CallType::Call,
+        };
+        let selector = if inputs.input.len() >= 4 {
+            format!("0x{}", hex::encode(&inputs.input[..4]))
+        } else {
+            "0x".to_string()
+        };
+        let value_wei = inputs
+            .transfer_value()
+            .map(|v| v.to::<u128>())
+            .unwrap_or(0);
+
+        self.traces.push(InternalCallTrace {
+            depth,
+            call_type,
+            caller: format!("{:#x}", inputs.caller),
+            target: format!("{:#x}", inputs.bytecode_address),
+            value_wei,
+            selector,
+            reverted: false,
+        });
+        None
+    }
+
