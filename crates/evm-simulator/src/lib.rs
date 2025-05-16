@@ -140,3 +140,17 @@ impl<DB: Database> Inspector<DB> for SecurityInspector {
         None
     }
 
+    fn call_end(
+        &mut self,
+        _context: &mut EvmContext<DB>,
+        _inputs: &CallInputs,
+        outcome: CallOutcome,
+    ) -> CallOutcome {
+        if !outcome.result.result.is_ok() {
+            if let Some(last) = self.traces.last_mut() {
+                last.reverted = true;
+            }
+        }
+        outcome
+    }
+
