@@ -154,3 +154,27 @@ impl<DB: Database> Inspector<DB> for SecurityInspector {
         outcome
     }
 
+    fn create(
+        &mut self,
+        context: &mut EvmContext<DB>,
+        inputs: &mut CreateInputs,
+    ) -> Option<CreateOutcome> {
+        let depth = context.journaled_state.depth() as u16;
+        let call_type = match inputs.scheme {
+            CreateScheme::Create => CallType::Create,
+            CreateScheme::Create2 { .. } => CallType::Create2,
+        };
+        self.traces.push(InternalCallTrace {
+            depth,
+            call_type,
+            caller: format!("{:#x}", inputs.caller),
+            target: "0x0000000000000000000000000000000000000000".to_string(),
+            value_wei: inputs.value.to::<u128>(),
+            selector: "0xcreate".to_string(),
+            reverted: false,
+        });
+        None
+    }
+}
+
+/// Parse a 20-byte EVM `Address` from hex string.
