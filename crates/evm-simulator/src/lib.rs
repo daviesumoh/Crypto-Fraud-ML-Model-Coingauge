@@ -178,3 +178,24 @@ impl<DB: Database> Inspector<DB> for SecurityInspector {
 }
 
 /// Parse a 20-byte EVM `Address` from hex string.
+pub fn parse_evm_address(addr: &str) -> Result<Address, SimulatorError> {
+    let clean = addr.trim().strip_prefix("0x").unwrap_or(addr.trim());
+    let bytes = hex::decode(clean).map_err(|_| SimulatorError::InvalidHex(addr.to_string()))?;
+    if bytes.len() != 20 {
+        return Err(SimulatorError::InvalidHex(addr.to_string()));
+    }
+    Ok(Address::from_slice(&bytes))
+}
+
+/// Parse arbitrary hex payload (`0x...`) into `Bytes`.
+pub fn parse_hex_bytes(data: &str) -> Result<Bytes, SimulatorError> {
+    let clean = data.trim().strip_prefix("0x").unwrap_or(data.trim());
+    if clean.is_empty() {
+        return Ok(Bytes::new());
+    }
+    let raw = hex::decode(clean).map_err(|_| SimulatorError::InvalidHex(data.to_string()))?;
+    Ok(Bytes::from(raw))
+}
+
+/// Local `revm` state-diff simulator with realistic block-header anti-evasion defaults.
+#[derive(Debug, Default, Clone)]
