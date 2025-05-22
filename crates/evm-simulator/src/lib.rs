@@ -199,3 +199,35 @@ pub fn parse_hex_bytes(data: &str) -> Result<Bytes, SimulatorError> {
 
 /// Local `revm` state-diff simulator with realistic block-header anti-evasion defaults.
 #[derive(Debug, Default, Clone)]
+pub struct EvmStateSimulator {
+    seeded_accounts: HashMap<String, SeededAccount>,
+    eth_price_usd: f64,
+}
+
+impl EvmStateSimulator {
+    pub fn new(eth_price_usd: f64) -> Self {
+        Self {
+            seeded_accounts: HashMap::new(),
+            eth_price_usd: if eth_price_usd > 0.0 {
+                eth_price_usd
+            } else {
+                3200.0
+            },
+        }
+    }
+
+    /// Seed an account's balance, nonce, runtime bytecode, or storage slots prior to simulation.
+    pub fn seed_account(&mut self, address: &str, account: SeededAccount) {
+        self.seeded_accounts
+            .insert(normalize_address(address), account);
+    }
+
+    /// Simulate a transaction locally in `revm` and decode all asset deltas, permissions, and traces.
+    pub fn simulate_transaction(
+        &self,
+        tx: &CanonicalTransaction,
+    ) -> Result<SimulationResult, SimulatorError> {
+        self.simulate_transaction_with_fork(tx, None)
+    }
+
+    /// Simulate a transaction in `revm` with on-demand state forking against live RPC.
