@@ -231,3 +231,69 @@ impl EvmStateSimulator {
     }
 
     /// Simulate a transaction in `revm` with on-demand state forking against live RPC.
+    pub fn simulate_transaction_with_fork(
+        &self,
+        tx: &CanonicalTransaction,
+        fork_provider: Option<&dyn ForkStateProvider>,
+    ) -> Result<SimulationResult, SimulatorError> {
+        let start = Instant::now();
+        let mut db = CacheDB::new(EmptyDB::default());
+
+        let sender_addr = parse_evm_address(&tx.sender)?;
+        let calldata = parse_hex_bytes(&tx.calldata_hex)?;
+
+        let sim_gas_limit = tx.gas_limit.max(500_000);
+        let sim_gas_price_wei = tx.max_fee_per_gas_wei.max(25_000_000_000);
+
+        // Ensure sender has enough seeded ETH to cover value + max simulated gas fee
+        let min_sender_wei = tx
+            .value_wei
+            .saturating_add((sim_gas_limit as u128).saturating_mul(sim_gas_price_wei).saturating_mul(2))
+            .max(10_000_000_000_000_000_000); // >= 10 ETH simulation buffer if unseeded
+
+        for (addr_str, seeded) in &self.seeded_accounts {
+            let addr = parse_evm_address(addr_str)?;
+            let code = if let Some(code_hex) = &seeded.bytecode_hex {
+                let raw = parse_hex_bytes(code_hex)?;
+                if raw.is_empty() {
+                    None
+                } else {
+                    Some(Bytecode::new_raw(raw))
+                }
+            } else {
+                None
+            };
+            let balance = if addr == sender_addr {
+                U256::from(seeded.balance_wei.max(min_sender_wei))
+            } else {
+                U256::from(seeded.balance_wei)
+            };
+            db.insert_account_info(
+                addr,
+                AccountInfo {
+                    balance,
+                    nonce: seeded.nonce,
+                    code_hash: B256::ZERO,
+                    code,
+                },
+            );
+            for (slot, val) in &seeded.storage_slots {
+                let _ = db.insert_account_storage(addr, *slot, *val);
+            }
+        }
+
+        if !self
+            .seeded_accounts
+            .contains_key(&normalize_address(&tx.sender))
+        {
+            db.insert_account_info(
+                sender_addr,
+                AccountInfo {
+                    balance: U256::from(min_sender_wei),
+                    nonce: tx.nonce,
+                    code_hash: B256::ZERO,
+                    code: None,
+                },
+            );
+        }
+
