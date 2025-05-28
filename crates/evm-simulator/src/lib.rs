@@ -297,3 +297,59 @@ impl EvmStateSimulator {
             );
         }
 
+        // On-demand RPC forking: load runtime bytecode and balances for target contracts
+        if let Some(provider) = fork_provider {
+            if let Some(rcpt) = &tx.recipient {
+                let norm_rcpt = normalize_address(rcpt);
+                if !self.seeded_accounts.contains_key(&norm_rcpt) {
+                    if let Some(code_hex) = provider.fetch_code(rcpt) {
+                        let clean = code_hex.trim_start_matches("0x");
+                        if !clean.is_empty() {
+                            if let Ok(raw) = hex::decode(clean) {
+                                if let Ok(addr) = parse_evm_address(rcpt) {
+                                    let balance = provider.fetch_balance(rcpt).unwrap_or(0);
+                                    db.insert_account_info(
+                                        addr,
+                                        AccountInfo {
+                                            balance: U256::from(balance),
+                                            nonce: 1,
+                                            code_hash: B256::ZERO,
+                                            code: Some(Bytecode::new_raw(Bytes::from(raw))),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also fork referenced contract addresses in calldata (e.g. approve/transfer target)
+            if calldata.len() >= 36 {
+                if let Some(arg_addr) = word_to_address(&calldata[4..36]) {
+                    let norm_arg = normalize_address(&arg_addr);
+                    if !self.seeded_accounts.contains_key(&norm_arg) && norm_arg != normalize_address(&tx.sender) {
+                        if let Some(c_hex) = provider.fetch_code(&arg_addr) {
+                            let clean = c_hex.trim_start_matches("0x");
+                            if !clean.is_empty() {
+                                if let Ok(raw) = hex::decode(clean) {
+                                    if let Ok(a) = parse_evm_address(&arg_addr) {
+                                        let bal = provider.fetch_balance(&arg_addr).unwrap_or(0);
+                                        db.insert_account_info(
+                                            a,
+                                            AccountInfo {
+                                                balance: U256::from(bal),
+                                                nonce: 1,
+                                                code_hash: B256::ZERO,
+                                                code: Some(Bytecode::new_raw(Bytes::from(raw))),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
