@@ -353,3 +353,44 @@ impl EvmStateSimulator {
             }
         }
 
+        let transact_to = match &tx.recipient {
+            Some(rcpt) if !rcpt.trim().is_empty() => TransactTo::Call(parse_evm_address(rcpt)?),
+            _ => TransactTo::Create,
+        };
+
+        // Realistic mainnet block header overrides to defeat `tx.gasprice == 0` / coinbase checks
+        let realistic_coinbase =
+            parse_evm_address("0x4838b106fce9647bdf1e7877bf73ce8b0bad5f97")?;
+
+        let mut inspector = SecurityInspector::default();
+        let exec_result = {
+            let mut evm = Evm::builder()
+                .with_db(&mut db)
+                .with_external_context(&mut inspector)
+                .modify_cfg_env(|cfg| {
+                    cfg.chain_id = tx.chain_id;
+                })
+                .modify_block_env(|blk| {
+                    blk.number = U256::from(tx.block_number.max(21_000_000));
+                    blk.timestamp = U256::from(tx.timestamp_sec.max(1_730_000_000));
+                    blk.coinbase = realistic_coinbase;
+                    blk.basefee = U256::from(20_000_000_000u64);
+                    blk.prevrandao = Some(B256::repeat_byte(0xa5));
+                })
+                .modify_tx_env(|tx_env| {
+                    tx_env.caller = sender_addr;
+                    tx_env.transact_to = transact_to;
+                    tx_env.data = calldata.clone();
+                    tx_env.value = U256::from(tx.value_wei);
+                    tx_env.gas_limit = sim_gas_limit;
+                    tx_env.gas_price = U256::from(sim_gas_price_wei);
+                    tx_env.chain_id = Some(tx.chain_id);
+                    tx_env.nonce = None; // Allow out-of-order pre-sign simulation
+                })
+                .append_handler_register(revm::inspector_handle_register)
+                .build();
+
+            evm.transact_commit()
+                .map_err(|e| SimulatorError::ExecutionFailed(format!("{e:?}")))?
+        };
+
