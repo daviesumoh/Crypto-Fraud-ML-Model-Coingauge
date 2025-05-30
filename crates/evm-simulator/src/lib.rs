@@ -394,3 +394,90 @@ impl EvmStateSimulator {
                 .map_err(|e| SimulatorError::ExecutionFailed(format!("{e:?}")))?
         };
 
+        let mut asset_movements = Vec::new();
+        let mut permission_mutations = Vec::new();
+
+        // 1. Native value transfer (if non-zero)
+        if tx.value_wei > 0 {
+            if let Some(rcpt) = &tx.recipient {
+                let usd = if tx.value_usd > 0.0 {
+                    tx.value_usd
+                } else {
+                    (tx.value_wei as f64 / 1e18) * self.eth_price_usd
+                };
+                asset_movements.push(AssetMovement {
+                    asset_standard: AssetStandard::Native,
+                    token_address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+                    token_symbol: Some("ETH".to_string()),
+                    from_address: normalize_address(&tx.sender),
+                    to_address: normalize_address(rcpt),
+                    raw_amount: tx.value_wei,
+                    amount_usd: usd,
+                    recipient_post_balance_usd: usd,
+                });
+            }
+        }
+
+        // 2. Decode top-level calldata permissions & token transfers (critical for unseeded contracts & Permit2)
+        if let Some(rcpt) = &tx.recipient {
+            decode_calldata_mutations(
+                &normalize_address(&tx.sender),
+                &normalize_address(rcpt),
+                &calldata,
+                tx.value_usd,
+                &mut asset_movements,
+                &mut permission_mutations,
+            );
+        }
+
+        // 3. Extract emitted EVM logs (`Transfer`, `Approval`, `ApprovalForAll`)
+        let (success, gas_used, revert_reason) = match exec_result {
+            ExecutionResult::Success {
+                gas_used, logs, ..
+            } => {
+                for log in logs {
+                    let emitter = format!("{:#x}", log.address);
+                    let topics_hex: Vec<String> = log
+                        .data
+                        .topics()
+                        .iter()
+                        .map(|t| format!("{:#x}", t))
+                        .collect();
+                    decode_log_event(
+                        &emitter,
+                        &topics_hex,
+                        log.data.data.as_ref(),
+                        &mut asset_movements,
+                        &mut permission_mutations,
+                    );
+                }
+                (true, gas_used, None)
+            }
+            ExecutionResult::Revert { gas_used, output } => (
+                false,
+                gas_used,
+                Some(format!("Reverted: 0x{}", hex::encode(output))),
+            ),
+            ExecutionResult::Halt { reason, gas_used } => {
+                (false, gas_used, Some(format!("Halted: {reason:?}")))
+            }
+        };
+
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+        Ok(SimulationResult {
+            success,
+            revert_reason,
+            gas_used,
+            internal_traces: inspector.traces,
+            asset_movements,
+            permission_mutations,
+            env_evasion_opcode_detected: inspector.env_evasion_branch_to_call,
+            honeypot_sell_reverted: false,
+            observed_sell_tax_pct: 0.0,
+            simulation_latency_ms: elapsed_ms,
+        })
+    }
+}
+
+/// Extract address from a 32-byte ABI word (`bytes[12..32]`).
