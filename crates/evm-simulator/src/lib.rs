@@ -481,3 +481,27 @@ impl EvmStateSimulator {
 }
 
 /// Extract address from a 32-byte ABI word (`bytes[12..32]`).
+fn word_to_address(word: &[u8]) -> Option<String> {
+    if word.len() < 32 {
+        return None;
+    }
+    Some(format!("0x{}", hex::encode(&word[12..32])))
+}
+
+/// Check if a 32-byte uint256 word represents an effectively unlimited approval (`>= 2^128 - 1`).
+fn word_is_unlimited_u256(word: &[u8]) -> (bool, u128) {
+    if word.len() < 32 {
+        return (false, 0);
+    }
+    let upper_non_zero = word[..16].iter().any(|&b| b != 0);
+    let mut lower = [0u8; 16];
+    lower.copy_from_slice(&word[16..32]);
+    let lower_val = u128::from_be_bytes(lower);
+    let is_max_uint160 = word[12..32].iter().all(|&b| b == 0xff);
+    (
+        upper_non_zero || is_max_uint160 || lower_val == u128::MAX,
+        if upper_non_zero { u128::MAX } else { lower_val },
+    )
+}
+
+/// Decode common token approvals, `Permit2`, and transfers directly from ABI calldata.
