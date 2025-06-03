@@ -505,3 +505,40 @@ fn word_is_unlimited_u256(word: &[u8]) -> (bool, u128) {
 }
 
 /// Decode common token approvals, `Permit2`, and transfers directly from ABI calldata.
+pub fn decode_calldata_mutations(
+    sender: &str,
+    target: &str,
+    calldata: &[u8],
+    fallback_usd: f64,
+    movements: &mut Vec<AssetMovement>,
+    permissions: &mut Vec<PermissionMutation>,
+) {
+    if calldata.len() < 4 {
+        return;
+    }
+    let selector = format!("0x{}", hex::encode(&calldata[..4]));
+    let args = &calldata[4..];
+
+    match selector.as_str() {
+        selectors::ERC20_APPROVE | selectors::INCREASE_ALLOWANCE if args.len() >= 64 => {
+            if let Some(spender) = word_to_address(&args[0..32]) {
+                let (is_unlimited, raw) = word_is_unlimited_u256(&args[32..64]);
+                permissions.push(PermissionMutation {
+                    kind: if selector == selectors::ERC20_APPROVE {
+                        PermissionKind::Erc20Approve
+                    } else {
+                        PermissionKind::IncreaseAllowance
+                    },
+                    owner: sender.to_string(),
+                    spender,
+                    token_address: target.to_string(),
+                    is_unlimited,
+                    allowance_usd: if is_unlimited {
+                        1_000_000_000.0
+                    } else {
+                        (raw as f64) / 1e6
+                    },
+                    expiration_sec: None,
+                });
+            }
+        }
