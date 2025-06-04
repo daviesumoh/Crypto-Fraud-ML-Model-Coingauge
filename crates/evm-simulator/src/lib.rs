@@ -542,3 +542,39 @@ pub fn decode_calldata_mutations(
                 });
             }
         }
+        selectors::SET_APPROVAL_FOR_ALL if args.len() >= 64 => {
+            if let Some(operator) = word_to_address(&args[0..32]) {
+                let approved = args[63] != 0;
+                if approved {
+                    permissions.push(PermissionMutation {
+                        kind: PermissionKind::ApprovalForAll,
+                        owner: sender.to_string(),
+                        spender: operator,
+                        token_address: target.to_string(),
+                        is_unlimited: true,
+                        allowance_usd: 1_000_000_000.0,
+                        expiration_sec: None,
+                    });
+                }
+            }
+        }
+        selectors::EIP2612_PERMIT if args.len() >= 128 => {
+            if let (Some(owner), Some(spender)) =
+                (word_to_address(&args[0..32]), word_to_address(&args[32..64]))
+            {
+                let (is_unlimited, raw) = word_is_unlimited_u256(&args[64..96]);
+                permissions.push(PermissionMutation {
+                    kind: PermissionKind::Eip2612Permit,
+                    owner,
+                    spender,
+                    token_address: target.to_string(),
+                    is_unlimited,
+                    allowance_usd: if is_unlimited {
+                        1_000_000_000.0
+                    } else {
+                        (raw as f64) / 1e6
+                    },
+                    expiration_sec: None,
+                });
+            }
+        }
