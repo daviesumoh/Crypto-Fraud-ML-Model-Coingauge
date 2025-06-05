@@ -578,3 +578,47 @@ pub fn decode_calldata_mutations(
                 });
             }
         }
+        selectors::PERMIT2_APPROVE if args.len() >= 128 => {
+            if let (Some(token), Some(spender)) =
+                (word_to_address(&args[0..32]), word_to_address(&args[32..64]))
+            {
+                let (is_unlimited, raw) = word_is_unlimited_u256(&args[64..96]);
+                permissions.push(PermissionMutation {
+                    kind: PermissionKind::UniswapPermit2,
+                    owner: sender.to_string(),
+                    spender,
+                    token_address: token,
+                    is_unlimited,
+                    allowance_usd: if is_unlimited {
+                        1_000_000_000.0
+                    } else {
+                        (raw as f64) / 1e6
+                    },
+                    expiration_sec: None,
+                });
+            }
+        }
+        selectors::PERMIT2_PERMIT_SINGLE if args.len() >= 192 => {
+            // ABI layout: owner (0..32), details.token (32..64), details.amount (64..96),
+            // details.expiration (96..128), details.nonce (128..160), spender (160..192)
+            if let (Some(owner), Some(token), Some(spender)) = (
+                word_to_address(&args[0..32]),
+                word_to_address(&args[32..64]),
+                word_to_address(&args[160..192]),
+            ) {
+                let (is_unlimited, raw) = word_is_unlimited_u256(&args[64..96]);
+                permissions.push(PermissionMutation {
+                    kind: PermissionKind::UniswapPermit2,
+                    owner,
+                    spender,
+                    token_address: token,
+                    is_unlimited,
+                    allowance_usd: if is_unlimited {
+                        1_000_000_000.0
+                    } else {
+                        (raw as f64) / 1e6
+                    },
+                    expiration_sec: None,
+                });
+            }
+        }
