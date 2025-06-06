@@ -647,3 +647,78 @@ pub fn decode_calldata_mutations(
 }
 
 /// Decode standard ERC-20 / ERC-721 `Transfer`, `Approval`, and `ApprovalForAll` log events.
+fn decode_log_event(
+    emitter: &str,
+    topics: &[String],
+    data: &[u8],
+    movements: &mut Vec<AssetMovement>,
+    permissions: &mut Vec<PermissionMutation>,
+) {
+    if topics.is_empty() {
+        return;
+    }
+    match topics[0].as_str() {
+        topics::TRANSFER_TOPIC0 if topics.len() >= 3 => {
+            let from = format!("0x{}", &topics[1][topics[1].len().saturating_sub(40)..]);
+            let to = format!("0x{}", &topics[2][topics[2].len().saturating_sub(40)..]);
+            let (_, raw) = if data.len() >= 32 {
+                word_is_unlimited_u256(&data[0..32])
+            } else {
+                (false, 1)
+            };
+            let standard = if topics.len() == 4 {
+                AssetStandard::Erc721
+            } else {
+                AssetStandard::Erc20
+            };
+            movements.push(AssetMovement {
+                asset_standard: standard,
+                token_address: normalize_address(emitter),
+                token_symbol: None,
+                from_address: normalize_address(&from),
+                to_address: normalize_address(&to),
+                raw_amount: raw,
+                amount_usd: (raw as f64) / 1e6,
+                recipient_post_balance_usd: (raw as f64) / 1e6,
+            });
+        }
+        topics::APPROVAL_TOPIC0 if topics.len() >= 3 && data.len() >= 32 => {
+            let owner = format!("0x{}", &topics[1][topics[1].len().saturating_sub(40)..]);
+            let spender = format!("0x{}", &topics[2][topics[2].len().saturating_sub(40)..]);
+            let (is_unlimited, raw) = word_is_unlimited_u256(&data[0..32]);
+            permissions.push(PermissionMutation {
+                kind: PermissionKind::Erc20Approve,
+                owner: normalize_address(&owner),
+                spender: normalize_address(&spender),
+                token_address: normalize_address(emitter),
+                is_unlimited,
+                allowance_usd: if is_unlimited {
+                    1_000_000_000.0
+                } else {
+                    (raw as f64) / 1e6
+                },
+                expiration_sec: None,
+            });
+        }
+        topics::APPROVAL_FOR_ALL_TOPIC0 if topics.len() >= 3 && data.len() >= 32 => {
+            let owner = format!("0x{}", &topics[1][topics[1].len().saturating_sub(40)..]);
+            let spender = format!("0x{}", &topics[2][topics[2].len().saturating_sub(40)..]);
+            if data[31] != 0 {
+                permissions.push(PermissionMutation {
+                    kind: PermissionKind::ApprovalForAll,
+                    owner: normalize_address(&owner),
+                    spender: normalize_address(&spender),
+                    token_address: normalize_address(emitter),
+                    is_unlimited: true,
+                    allowance_usd: 1_000_000_000.0,
+                    expiration_sec: None,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remove Output unused warning helper while preserving revm compatibility.
+const _: fn(&Output) = |_| {};
+
