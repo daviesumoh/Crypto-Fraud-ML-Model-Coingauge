@@ -622,3 +622,28 @@ pub fn decode_calldata_mutations(
                 });
             }
         }
+        selectors::ERC20_TRANSFER if args.len() >= 64 => {
+            if let Some(rcpt) = word_to_address(&args[0..32]) {
+                let (_, raw) = word_is_unlimited_u256(&args[32..64]);
+                let usd = if fallback_usd > 0.0 {
+                    fallback_usd
+                } else {
+                    (raw as f64) / 1e6
+                };
+                movements.push(AssetMovement {
+                    asset_standard: AssetStandard::Erc20,
+                    token_address: target.to_string(),
+                    token_symbol: None,
+                    from_address: sender.to_string(),
+                    to_address: rcpt,
+                    raw_amount: raw,
+                    amount_usd: usd,
+                    recipient_post_balance_usd: usd,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Decode standard ERC-20 / ERC-721 `Transfer`, `Approval`, and `ApprovalForAll` log events.
