@@ -722,3 +722,33 @@ fn decode_log_event(
 /// Remove Output unused warning helper while preserving revm compatibility.
 const _: fn(&Output) = |_| {};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common_types::FinalityStatus;
+
+    fn sample_tx(recipient: &str, calldata_hex: &str) -> CanonicalTransaction {
+        CanonicalTransaction {
+            chain_id: 1,
+            block_number: 21_200_000,
+            block_hash: format!("0x{}", "11".repeat(32)),
+            parent_hash: format!("0x{}", "00".repeat(32)),
+            tx_hash: format!("0x{}", "22".repeat(32)),
+            timestamp_sec: 1_730_500_000,
+            finality_status: FinalityStatus::Pending,
+            sender: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            recipient: Some(recipient.to_string()),
+            value_wei: 0,
+            value_usd: 0.0,
+            calldata_hex: calldata_hex.to_string(),
+            gas_limit: 250_000,
+            max_fee_per_gas_wei: 30_000_000_000,
+            priority_fee_per_gas_wei: 2_000_000_000,
+            block_priority_fee_percentile: 50.0,
+            nonce: 12,
+            blocks_since_last_inbound_funding: Some(100),
+            sender_pre_balance_usd: 25_000.0,
+        }
+    }
+
+    #[test]
