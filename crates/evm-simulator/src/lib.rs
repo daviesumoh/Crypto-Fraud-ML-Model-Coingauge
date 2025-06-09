@@ -772,3 +772,57 @@ mod tests {
     }
 
     #[test]
+    fn detects_coinbase_evasion_branch_and_delegatecall_in_revm() {
+        let mut sim = EvmStateSimulator::new(3200.0);
+        let malicious_contract = "0xcccccccccccccccccccccccccccccccccccccccc";
+        let impl_target = "dddddddddddddddddddddddddddddddddddddddd";
+
+        // Hand-crafted EVM runtime bytecode:
+        // 00: 41          COINBASE
+        // 01: 15          ISZERO
+        // 02: 15          ISZERO        (1 because simulator injects realistic coinbase!)
+        // 03: 60 08       PUSH1 0x08
+        // 05: 57          JUMPI         (conditional branch gated on COINBASE!)
+        // 06: 00          STOP
+        // 07: 5b          JUMPDEST      (offset 0x07? wait: index 7 -> let's push 0x07!)
+        // Let's trace exact byte offsets:
+        // [0] 0x41 (COINBASE)
+        // [1] 0x60, [2] 0x06 (PUSH1 0x06)
+        // [3] 0x57 (JUMPI -> jumps to offset 6 since COINBASE != 0)
+        // [4] 0x00 (STOP)
+        // [5] 0x00 (STOP)
+        // [6] 0x5b (JUMPDEST)
+        // [7] 0x60, [8] 0x00 (PUSH1 0 retSize)
+        // [9] 0x60, [10] 0x00 (PUSH1 0 retOffset)
+        // [11] 0x60, [12] 0x00 (PUSH1 0 argsSize)
+        // [13] 0x60, [14] 0x00 (PUSH1 0 argsOffset)
+        // [15] 0x73, [16..35] <20-byte impl_target> (PUSH20 target)
+        // [36] 0x5a (GAS)
+        // [37] 0xf4 (DELEGATECALL)
+        // [38] 0x00 (STOP)
+        let bytecode = format!(
+            "0x4160065700005b600060006000600073{impl_target}5af400"
+        );
+
+        sim.seed_account(
+            malicious_contract,
+            SeededAccount {
+                balance_wei: 0,
+                nonce: 1,
+                bytecode_hex: Some(bytecode),
+                storage_slots: HashMap::new(),
+            },
+        );
+
+        let res = sim
+            .simulate_transaction(&sample_tx(malicious_contract, "0xdeadbeef"))
+            .expect("simulation succeeds");
+
+        assert!(res.env_evasion_opcode_detected);
+        assert!(res
+            .internal_traces
+            .iter()
+            .any(|t| t.call_type == CallType::DelegateCall
+                && t.target == format!("0x{impl_target}")));
+    }
+}
