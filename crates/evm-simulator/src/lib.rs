@@ -752,3 +752,23 @@ mod tests {
     }
 
     #[test]
+    fn simulates_unlimited_erc20_approve_and_decodes_permission() {
+        let sim = EvmStateSimulator::new(3200.0);
+        let spender_word = format!("000000000000000000000000{}", "bb".repeat(20));
+        let max_u256_word = "ff".repeat(32);
+        let calldata = format!("0x095ea7b3{spender_word}{max_u256_word}");
+        let token = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+        let res = sim
+            .simulate_transaction(&sample_tx(token, &calldata))
+            .expect("simulation succeeds");
+
+        assert!(res.success);
+        assert_eq!(res.permission_mutations.len(), 1);
+        let perm = &res.permission_mutations[0];
+        assert_eq!(perm.kind, PermissionKind::Erc20Approve);
+        assert!(perm.is_unlimited);
+        assert_eq!(perm.spender, format!("0x{}", "bb".repeat(20)));
+    }
+
+    #[test]
