@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/common-types",
     "crates/evm-simulator",
+    "crates/heuristics-engine",
 ]
 
 [workspace.package]
