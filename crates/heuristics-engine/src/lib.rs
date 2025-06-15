@@ -121,3 +121,36 @@ impl HeuristicsEngine {
             return summary;
         }
 
+        // Build forward adjacency list for multi-hop path search from malicious sources `v -> ... -> subject`
+        let mut adj: HashMap<String, Vec<&GraphTransferEdge>> = HashMap::new();
+        for edge in edges {
+            adj.entry(normalize_address(&edge.from))
+                .or_default()
+                .push(edge);
+        }
+
+        // Bounded DFS seeded only from malicious sources present in the subgraph edges
+        for (src_addr, _) in &adj {
+            let Some(src_lbl) = label_map.get(src_addr.as_str()) else {
+                continue;
+            };
+            if src_lbl.severity_weight <= 0.0 || src_lbl.is_omnibus_sink {
+                continue;
+            }
+
+            let mut stack: Vec<(String, usize, f64, u64, HashSet<String>)> = Vec::new();
+            let mut visited_init = HashSet::new();
+            visited_init.insert(src_addr.clone());
+            stack.push((src_addr.clone(), 0, 1.0, current_ts, visited_init));
+
+            while let Some((curr, hops, flow_product, earliest_ts, visited)) = stack.pop() {
+                if hops >= self.taint_config.max_hops {
+                    continue;
+                }
+                if let Some(out_edges) = adj.get(&curr) {
+                    for edge in out_edges {
+                        let next = normalize_address(&edge.to);
+                        if visited.contains(&next) {
+                            continue;
+                        }
+
