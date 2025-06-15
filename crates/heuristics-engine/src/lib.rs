@@ -62,3 +62,62 @@ pub struct HeuristicEvaluationContext<'a> {
 
 /// Core deterministic heuristics and taint evaluation engine.
 #[derive(Debug, Clone, Default)]
+pub struct HeuristicsEngine {
+    pub taint_config: TaintConfig,
+}
+
+impl HeuristicsEngine {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compute bounded `k <= 5` hop haircut taint exposure with omnibus-sink termination
+    /// and unsolicited inbound dust quarantine.
+    pub fn compute_taint_exposure(
+        &self,
+        subject: &str,
+        counterparty: Option<&str>,
+        current_ts: u64,
+        edges: &[GraphTransferEdge],
+        labels: &[EntityLabel],
+    ) -> TaintExposureSummary {
+        let subject_norm = normalize_address(subject);
+        let counterparty_norm = counterparty.map(normalize_address);
+
+        let mut label_map: HashMap<String, &EntityLabel> = HashMap::new();
+        for lbl in labels {
+            label_map.insert(normalize_address(&lbl.address), lbl);
+        }
+
+        let mut summary = TaintExposureSummary::default();
+
+        // Check direct interaction with labeled entity (distance = 0 or 1)
+        for candidate in [Some(subject_norm.as_str()), counterparty_norm.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(lbl) = label_map.get(candidate) {
+                if lbl.severity_weight > 0.0 && !lbl.is_omnibus_sink {
+                    let hop = if candidate == subject_norm { 0 } else { 1 };
+                    let score = if hop == 0 {
+                        lbl.severity_weight
+                    } else {
+                        lbl.severity_weight * self.taint_config.hop_gamma.max(0.85)
+                    };
+                    if score > summary.max_taint_score {
+                        summary.max_taint_score = score;
+                        summary.nearest_illicit_address = Some(lbl.address.clone());
+                        summary.nearest_category = Some(lbl.category);
+                        summary.hop_distance = Some(hop);
+                    }
+                    if lbl.is_sanctioned || lbl.category == EntityCategory::WalletDrainer {
+                        summary.direct_sanctioned_touch = true;
+                    }
+                }
+            }
+        }
+
+        if edges.is_empty() {
+            return summary;
+        }
+
