@@ -154,3 +154,67 @@ impl HeuristicsEngine {
                             continue;
                         }
 
+                        // Quarantine unsolicited inbound dust to target when there is zero co-spend
+                        if next == subject_norm
+                            && edge.amount_usd < self.taint_config.dust_quarantine_usd
+                            && !edge.recipient_has_outbound_cospend
+                        {
+                            summary.quarantined_dust_edges += 1;
+                            continue;
+                        }
+
+                        let haircut = if edge.recipient_post_balance_usd > 0.0 {
+                            (edge.amount_usd / edge.recipient_post_balance_usd).clamp(0.0, 1.0)
+                        } else {
+                            1.0
+                        };
+                        let next_flow = flow_product * haircut;
+                        let next_hops = hops + 1;
+                        let path_ts = earliest_ts.min(edge.timestamp_sec);
+
+                        if next == subject_norm
+                            || counterparty_norm.as_deref() == Some(next.as_str())
+                        {
+                            let age_days =
+                                (current_ts.saturating_sub(path_ts) as f64) / 86_400.0;
+                            let time_decay = if src_lbl.is_sanctioned {
+                                1.0 // Sanctioned exposure does not expire via short time decay
+                            } else {
+                                (-self.taint_config.daily_decay_lambda * age_days).exp()
+                            };
+                            let hop_atten = self.taint_config.hop_gamma.powi(next_hops as i32);
+                            let candidate_taint =
+                                src_lbl.severity_weight * hop_atten * time_decay * next_flow;
+
+                            if candidate_taint > summary.max_taint_score {
+                                summary.max_taint_score = candidate_taint;
+                                summary.nearest_illicit_address = Some(src_lbl.address.clone());
+                                summary.nearest_category = Some(src_lbl.category);
+                                summary.hop_distance = Some(next_hops);
+                            }
+                            if next_hops == 1 && src_lbl.is_sanctioned {
+                                summary.direct_sanctioned_touch = true;
+                            }
+                            continue;
+                        }
+
+                        // Terminate traversal at verified CEX omnibus wallets, canonical bridges & DEX pools
+                        if let Some(inter_lbl) = label_map.get(&next) {
+                            if inter_lbl.is_omnibus_sink {
+                                summary.terminated_at_omnibus_sinks += 1;
+                                continue;
+                            }
+                        }
+
+                        let mut next_visited = visited.clone();
+                        next_visited.insert(next.clone());
+                        stack.push((next, next_hops, next_flow, path_ts, next_visited));
+                    }
+                }
+            }
+        }
+
+        summary
+    }
+
+    /// Evaluate all 9 production blockchain heuristics (`H-SIM-01` .. `H-MEM-01`).
