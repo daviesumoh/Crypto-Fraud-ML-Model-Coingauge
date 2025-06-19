@@ -218,3 +218,30 @@ impl HeuristicsEngine {
     }
 
     /// Evaluate all 9 production blockchain heuristics (`H-SIM-01` .. `H-MEM-01`).
+    pub fn evaluate_all(
+        &self,
+        ctx: &HeuristicEvaluationContext<'_>,
+    ) -> (Vec<HeuristicFinding>, TaintExposureSummary) {
+        let mut findings = Vec::new();
+        let subject = normalize_address(ctx.subject_address);
+
+        let contract_map: HashMap<String, &ContractArtifact> = ctx
+            .contracts
+            .iter()
+            .map(|c| (normalize_address(&c.address), c))
+            .collect();
+        let label_map: HashMap<String, &EntityLabel> = ctx
+            .entity_labels
+            .iter()
+            .map(|l| (normalize_address(&l.address), l))
+            .collect();
+
+        let counterparty = ctx
+            .transaction
+            .and_then(|tx| tx.recipient.as_deref())
+            .map(normalize_address);
+
+        // ---------------------------------------------------------------------
+        // 1. Pre-Sign Simulation Heuristics (`H-SIM-01`, `H-APP-01`, `H-EVM-01`, `H-TOK-01`)
+        // ---------------------------------------------------------------------
+        if let Some(sim) = ctx.simulation {
