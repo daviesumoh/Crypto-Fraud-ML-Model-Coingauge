@@ -245,3 +245,69 @@ impl HeuristicsEngine {
         // 1. Pre-Sign Simulation Heuristics (`H-SIM-01`, `H-APP-01`, `H-EVM-01`, `H-TOK-01`)
         // ---------------------------------------------------------------------
         if let Some(sim) = ctx.simulation {
+            // H-SIM-01: Asymmetric Outflow Drainer
+            let mut outbound_usd = 0.0;
+            let mut inbound_usd = 0.0;
+            let mut suspicious_sink: Option<String> = None;
+
+            for mov in &sim.asset_movements {
+                let from = normalize_address(&mov.from_address);
+                let to = normalize_address(&mov.to_address);
+                if from == subject && to != subject {
+                    outbound_usd += mov.amount_usd;
+                    let is_trusted = label_map
+                        .get(&to)
+                        .map(|l| {
+                            matches!(
+                                l.category,
+                                EntityCategory::VerifiedProtocol
+                                    | EntityCategory::DexPool
+                                    | EntityCategory::CanonicalBridge
+                                    | EntityCategory::CexOmnibus
+                            )
+                        })
+                        .unwrap_or(false);
+                    let is_unverified_or_young = contract_map
+                        .get(&to)
+                        .map(|c| c.is_eoa || !c.is_verified || c.age_hours < 72.0)
+                        .unwrap_or(true);
+
+                    if !is_trusted && is_unverified_or_young {
+                        suspicious_sink = Some(to);
+                    }
+                } else if to == subject && from != subject {
+                    inbound_usd += mov.amount_usd;
+                }
+            }
+
+            if outbound_usd >= 100.0 && inbound_usd == 0.0 {
+                if let Some(sink) = &suspicious_sink {
+                    let is_known_drainer = label_map
+                        .get(sink)
+                        .map(|l| l.category == EntityCategory::WalletDrainer)
+                        .unwrap_or(false);
+                    let is_young_contract = contract_map
+                        .get(sink)
+                        .map(|c| !c.is_eoa && (!c.is_verified || c.age_hours < 72.0))
+                        .unwrap_or(false);
+
+                    if is_known_drainer || is_young_contract {
+                        findings.push(HeuristicFinding {
+                            rule_id: "H-SIM-01".to_string(),
+                            rule_version: "1.2.0".to_string(),
+                            title: "Asymmetric Asset Drain Detected".to_string(),
+                            severity: Severity::Critical,
+                            triggers_critical_veto: true,
+                            description: format!(
+                                "Simulated execution drains ${outbound_usd:.2} in assets to unverified/malicious target {sink} with $0.00 inbound consideration."
+                            ),
+                            evidence: serde_json::json!({
+                                "outbound_usd": outbound_usd,
+                                "inbound_usd": inbound_usd,
+                                "destination": sink,
+                            }),
+                        });
+                    }
+                }
+            }
+
