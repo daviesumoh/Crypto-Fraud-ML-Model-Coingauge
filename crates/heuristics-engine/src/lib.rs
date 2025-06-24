@@ -311,3 +311,60 @@ impl HeuristicsEngine {
                 }
             }
 
+            // H-APP-01: EOA / Unverified Spender Unlimited Approval or Permit2 Phishing
+            for perm in &sim.permission_mutations {
+                let spender = normalize_address(&perm.spender);
+                let trusted_protocol = label_map
+                    .get(&spender)
+                    .map(|l| {
+                        matches!(
+                            l.category,
+                            EntityCategory::VerifiedProtocol
+                                | EntityCategory::DexPool
+                                | EntityCategory::CanonicalBridge
+                        )
+                    })
+                    .unwrap_or(false);
+                if trusted_protocol {
+                    continue;
+                }
+
+                let (is_eoa, is_verified) = contract_map
+                    .get(&spender)
+                    .map(|c| (c.is_eoa, c.is_verified))
+                    .unwrap_or((true, false));
+
+                let tx_val = ctx.transaction.map(|t| t.value_usd).unwrap_or(0.0);
+                let excessive =
+                    perm.is_unlimited || (tx_val > 0.0 && perm.allowance_usd > tx_val * 10.0);
+
+                if excessive && (is_eoa || !is_verified) {
+                    findings.push(HeuristicFinding {
+                        rule_id: "H-APP-01".to_string(),
+                        rule_version: "1.3.0".to_string(),
+                        title: "High-Risk Token Approval / Permit2 Phishing".to_string(),
+                        severity: Severity::Critical,
+                        triggers_critical_veto: true,
+                        description: format!(
+                            "{:?} grants {} allowance on token {} to {} spender {}.",
+                            perm.kind,
+                            if perm.is_unlimited {
+                                "UNLIMITED"
+                            } else {
+                                "excessive (>10x)"
+                            },
+                            perm.token_address,
+                            if is_eoa { "EOA wallet" } else { "unverified contract" },
+                            spender
+                        ),
+                        evidence: serde_json::json!({
+                            "permission_kind": perm.kind,
+                            "spender": spender,
+                            "token": perm.token_address,
+                            "is_eoa_spender": is_eoa,
+                            "is_unlimited": perm.is_unlimited,
+                        }),
+                    });
+                }
+            }
+
