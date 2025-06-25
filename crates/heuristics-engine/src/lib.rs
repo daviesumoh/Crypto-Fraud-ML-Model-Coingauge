@@ -368,3 +368,40 @@ impl HeuristicsEngine {
                 }
             }
 
+            // H-EVM-01: Untrusted Delegatecall / Metamorphic Factory / Env Evasion Branching
+            let untrusted_delegatecall = sim.internal_traces.iter().find(|tr| {
+                let target_norm = normalize_address(&tr.target);
+                let is_zero_or_precompile =
+                    target_norm.starts_with("0x000000000000000000000000000000000000000");
+                tr.call_type == CallType::DelegateCall
+                    && !is_zero_or_precompile
+                    && !contract_map
+                        .get(&target_norm)
+                        .map(|c| c.is_whitelisted_proxy_target)
+                        .unwrap_or(false)
+            });
+
+            let metamorphic_target = counterparty
+                .as_ref()
+                .and_then(|rcpt| contract_map.get(rcpt))
+                .filter(|c| c.deployed_via_create2 && c.factory_has_selfdestruct_history);
+
+            if untrusted_delegatecall.is_some()
+                || metamorphic_target.is_some()
+                || sim.env_evasion_opcode_detected
+            {
+                findings.push(HeuristicFinding {
+                    rule_id: "H-EVM-01".to_string(),
+                    rule_version: "1.1.0".to_string(),
+                    title: "Obfuscated Execution / Simulation Evasion Pattern".to_string(),
+                    severity: Severity::High,
+                    triggers_critical_veto: metamorphic_target.is_some(),
+                    description: "Execution invokes untrusted DELEGATECALL, metamorphic CREATE2/SELFDESTRUCT lineage, or COINBASE/GASPRICE conditional branching.".to_string(),
+                    evidence: serde_json::json!({
+                        "untrusted_delegatecall_target": untrusted_delegatecall.map(|t| &t.target),
+                        "metamorphic_contract": metamorphic_target.map(|c| &c.address),
+                        "env_evasion_opcode_detected": sim.env_evasion_opcode_detected,
+                    }),
+                });
+            }
+
