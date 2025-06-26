@@ -405,3 +405,54 @@ impl HeuristicsEngine {
                 });
             }
 
+            // H-TOK-01: Asymmetric Transfer Trap (Honeypot)
+            if sim.honeypot_sell_reverted || sim.observed_sell_tax_pct > 25.0 {
+                findings.push(HeuristicFinding {
+                    rule_id: "H-TOK-01".to_string(),
+                    rule_version: "1.0.0".to_string(),
+                    title: "Token Honeypot / Transfer Trap".to_string(),
+                    severity: Severity::High,
+                    triggers_critical_veto: sim.honeypot_sell_reverted,
+                    description: if sim.honeypot_sell_reverted {
+                        "Dual-simulation buy/sell probe reverted on outbound transfer (unsellable honeypot token).".to_string()
+                    } else {
+                        format!(
+                            "Outbound sell probe incurred {:.1}% hidden transfer tax (>25% threshold).",
+                            sim.observed_sell_tax_pct
+                        )
+                    },
+                    evidence: serde_json::json!({
+                        "sell_reverted": sim.honeypot_sell_reverted,
+                        "observed_sell_tax_pct": sim.observed_sell_tax_pct,
+                    }),
+                });
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. Social Engineering & Mempool Urgency (`H-SOC-01`, `H-MEM-01`)
+        // ---------------------------------------------------------------------
+        if let Some(tx) = ctx.transaction {
+            // Look up transfer destination (either native recipient or ERC-20 transfer target)
+            let transfer_targets: Vec<String> = {
+                let mut targets = Vec::new();
+                if let Some(rcpt) = &tx.recipient {
+                    targets.push(normalize_address(rcpt));
+                }
+                if let Some(sim) = ctx.simulation {
+                    for mov in &sim.asset_movements {
+                        if normalize_address(&mov.from_address) == subject {
+                            targets.push(normalize_address(&mov.to_address));
+                        }
+                    }
+                }
+                targets
+            };
+
+            let dust_senders: HashSet<String> = ctx
+                .wallet_history
+                .prior_zero_or_dust_senders
+                .iter()
+                .map(|s| normalize_address(s))
+                .collect();
+
