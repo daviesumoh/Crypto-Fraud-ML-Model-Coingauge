@@ -456,3 +456,36 @@ impl HeuristicsEngine {
                 .map(|s| normalize_address(s))
                 .collect();
 
+            // H-SOC-01: Address Poisoning Lookalike Detection
+            for target in &transfer_targets {
+                if target.len() == 42 {
+                    for trusted in &ctx.wallet_history.frequent_counterparties {
+                        let trusted_norm = normalize_address(trusted);
+                        if trusted_norm.len() == 42
+                            && &trusted_norm != target
+                            && trusted_norm[2..6] == target[2..6]
+                            && trusted_norm[38..42] == target[38..42]
+                            && dust_senders.contains(target)
+                        {
+                            findings.push(HeuristicFinding {
+                                rule_id: "H-SOC-01".to_string(),
+                                rule_version: "1.1.0".to_string(),
+                                title: "Address Poisoning Lookalike Detected".to_string(),
+                                severity: Severity::Critical,
+                                triggers_critical_veto: true,
+                                description: format!(
+                                    "Recipient {target} mimics frequent counterparty {trusted_norm} (matching 4-hex prefix & suffix) and previously sent a 0-value/dust spoof transfer."
+                                ),
+                                evidence: serde_json::json!({
+                                    "spoof_address": target,
+                                    "legitimate_counterparty": trusted_norm,
+                                    "matched_prefix": &target[0..6],
+                                    "matched_suffix": &target[38..42],
+                                }),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+
