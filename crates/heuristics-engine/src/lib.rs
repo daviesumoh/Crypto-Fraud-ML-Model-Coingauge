@@ -559,3 +559,26 @@ impl HeuristicsEngine {
             });
         }
 
+        // H-GRF-01: Peel Chain Detection (>= 4 sequential hops in <= 2h forwarding 85-98% to fresh wallets)
+        if let Some((chain_len, peel_start_ts, peel_end_ts)) =
+            detect_peel_chain(ctx.graph_edges)
+        {
+            if chain_len >= 4 && peel_end_ts.saturating_sub(peel_start_ts) <= 7_200 {
+                findings.push(HeuristicFinding {
+                    rule_id: "H-GRF-01".to_string(),
+                    rule_version: "1.1.0".to_string(),
+                    title: "Sequential Peel-Chain Laundering Topology".to_string(),
+                    severity: Severity::High,
+                    triggers_critical_veto: false,
+                    description: format!(
+                        "Detected {chain_len}-hop peel chain within {} minutes repeatedly forwarding 85%-98% to fresh nonce-0 wallets while peeling 2%-15% off.",
+                        peel_end_ts.saturating_sub(peel_start_ts) / 60
+                    ),
+                    evidence: serde_json::json!({
+                        "peel_hops": chain_len,
+                        "duration_sec": peel_end_ts.saturating_sub(peel_start_ts),
+                    }),
+                });
+            }
+        }
+
