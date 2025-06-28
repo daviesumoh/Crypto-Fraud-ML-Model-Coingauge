@@ -521,3 +521,41 @@ impl HeuristicsEngine {
         }
 
         // ---------------------------------------------------------------------
+        // 3. Multi-Hop Taint, Peel Chains & Sybil Topologies (`H-AML-01`, `H-GRF-01`, `H-GRF-02`)
+        // ---------------------------------------------------------------------
+        let taint = self.compute_taint_exposure(
+            &subject,
+            counterparty.as_deref(),
+            ctx.current_timestamp_sec,
+            ctx.graph_edges,
+            ctx.entity_labels,
+        );
+
+        if taint.max_taint_score >= 0.15 || taint.direct_sanctioned_touch {
+            let severity = if taint.direct_sanctioned_touch || taint.max_taint_score >= 0.55 {
+                Severity::Critical
+            } else if taint.max_taint_score >= 0.30 {
+                Severity::High
+            } else {
+                Severity::Medium
+            };
+            findings.push(HeuristicFinding {
+                rule_id: "H-AML-01".to_string(),
+                rule_version: "1.4.0".to_string(),
+                title: "Sanctioned / Illicit Taint Exposure".to_string(),
+                severity,
+                triggers_critical_veto: taint.direct_sanctioned_touch,
+                description: format!(
+                    "Haircut taint exposure {:.1}% from {:?} ({}) at {} hop(s).",
+                    taint.max_taint_score * 100.0,
+                    taint.nearest_category,
+                    taint
+                        .nearest_illicit_address
+                        .as_deref()
+                        .unwrap_or("unknown"),
+                    taint.hop_distance.unwrap_or(0)
+                ),
+                evidence: serde_json::to_value(&taint).unwrap_or_default(),
+            });
+        }
+
