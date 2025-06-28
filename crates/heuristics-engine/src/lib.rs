@@ -489,3 +489,35 @@ impl HeuristicsEngine {
                 }
             }
 
+            // H-MEM-01: Compromised Private Key Sweeper Bot Gas Profile
+            let sweeps_full_balance = tx.sender_pre_balance_usd > 50.0
+                && tx.value_usd >= tx.sender_pre_balance_usd * 0.92;
+            let immediate_after_funding = tx
+                .blocks_since_last_inbound_funding
+                .map(|b| b <= 2)
+                .unwrap_or(false);
+
+            if sweeps_full_balance
+                && tx.block_priority_fee_percentile >= 99.0
+                && immediate_after_funding
+            {
+                findings.push(HeuristicFinding {
+                    rule_id: "H-MEM-01".to_string(),
+                    rule_version: "1.0.0".to_string(),
+                    title: "Automated Key-Sweeper Gas & Balance Profile".to_string(),
+                    severity: Severity::High,
+                    triggers_critical_veto: false,
+                    description: format!(
+                        "Full-balance sweep (${:.2}) at {:.2}th percentile priority fee within <= 2 blocks of inbound funding.",
+                        tx.value_usd, tx.block_priority_fee_percentile
+                    ),
+                    evidence: serde_json::json!({
+                        "swept_usd": tx.value_usd,
+                        "priority_fee_percentile": tx.block_priority_fee_percentile,
+                        "blocks_since_funding": tx.blocks_since_last_inbound_funding,
+                    }),
+                });
+            }
+        }
+
+        // ---------------------------------------------------------------------
