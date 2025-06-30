@@ -582,3 +582,30 @@ impl HeuristicsEngine {
             }
         }
 
+        // H-GRF-02: Sybil Star Funding / Coordinated Selector Fan-Out
+        if let Some((faucet, fanout_count, common_selector)) =
+            detect_sybil_star_cluster(ctx.graph_edges)
+        {
+            findings.push(HeuristicFinding {
+                rule_id: "H-GRF-02".to_string(),
+                rule_version: "1.0.0".to_string(),
+                title: "Coordinated Sybil Star-Funding Cluster".to_string(),
+                severity: Severity::High,
+                triggers_critical_veto: false,
+                description: format!(
+                    "Faucet wallet {faucet} dispersed gas to {fanout_count} fresh wallets within 30 minutes executing synchronized selector {common_selector}."
+                ),
+                evidence: serde_json::json!({
+                    "faucet_address": faucet,
+                    "fresh_wallet_count": fanout_count,
+                    "selector": common_selector,
+                }),
+            });
+        }
+
+        (findings, taint)
+    }
+}
+
+/// Detect linear peel-chain hops where a wallet splits `[85%, 98%]` to a fresh wallet
+/// and peels `[2%, 15%]` to another counterparty.
