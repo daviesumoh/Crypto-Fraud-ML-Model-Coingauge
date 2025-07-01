@@ -609,3 +609,85 @@ impl HeuristicsEngine {
 
 /// Detect linear peel-chain hops where a wallet splits `[85%, 98%]` to a fresh wallet
 /// and peels `[2%, 15%]` to another counterparty.
+fn detect_peel_chain(edges: &[GraphTransferEdge]) -> Option<(usize, u64, u64)> {
+    let mut by_sender: HashMap<String, Vec<&GraphTransferEdge>> = HashMap::new();
+    for e in edges {
+        by_sender
+            .entry(normalize_address(&e.from))
+            .or_default()
+            .push(e);
+    }
+
+    let mut best: Option<(usize, u64, u64)> = None;
+
+    for start_sender in by_sender.keys() {
+        let mut curr = start_sender.clone();
+        let mut hops = 0usize;
+        let mut min_ts = u64::MAX;
+        let mut max_ts = 0u64;
+        let mut visited = HashSet::new();
+
+        while visited.insert(curr.clone()) {
+            let Some(out) = by_sender.get(&curr) else {
+                break;
+            };
+            if out.len() < 2 {
+                break;
+            }
+            let total_out: f64 = out.iter().map(|e| e.amount_usd).sum();
+            if total_out <= 0.0 {
+                break;
+            }
+            let continuation = out.iter().find(|e| {
+                let share = e.amount_usd / total_out;
+                e.recipient_is_fresh_nonce_zero && (0.85..=0.985).contains(&share)
+            });
+
+            if let Some(next_edge) = continuation {
+                hops += 1;
+                min_ts = min_ts.min(next_edge.timestamp_sec);
+                max_ts = max_ts.max(next_edge.timestamp_sec);
+                curr = normalize_address(&next_edge.to);
+            } else {
+                break;
+            }
+        }
+
+        if hops >= 4 && best.map(|b| hops > b.0).unwrap_or(true) {
+            best = Some((hops, min_ts, max_ts));
+        }
+    }
+
+    best
+}
+
+/// Detect a single funding EOA dispersing funds to `>= 15` fresh wallets within `30m`
+/// sharing an identical calldata selector.
+fn detect_sybil_star_cluster(edges: &[GraphTransferEdge]) -> Option<(String, usize, String)> {
+    let mut by_faucet: HashMap<(String, String), Vec<&GraphTransferEdge>> = HashMap::new();
+    for e in edges {
+        if e.recipient_is_fresh_nonce_zero {
+            by_faucet
+                .entry((normalize_address(&e.from), e.selector.clone()))
+                .or_default()
+                .push(e);
+        }
+    }
+
+    for ((faucet, selector), group) in by_faucet {
+        if group.len() < 15 {
+            continue;
+        }
+        let min_ts = group.iter().map(|e| e.timestamp_sec).min().unwrap_or(0);
+        let max_ts = group.iter().map(|e| e.timestamp_sec).max().unwrap_or(0);
+        let unique_recipients: HashSet<String> =
+            group.iter().map(|e| normalize_address(&e.to)).collect();
+
+        if unique_recipients.len() >= 15 && max_ts.saturating_sub(min_ts) <= 1_800 {
+            return Some((faucet, unique_recipients.len(), selector));
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
