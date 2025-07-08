@@ -691,3 +691,24 @@ fn detect_sybil_star_cluster(edges: &[GraphTransferEdge]) -> Option<(String, usi
 }
 
 #[derive(Debug, Clone)]
+pub struct CompositeRiskScorer {
+    pub w_heuristics: f64,
+    pub w_taint: f64,
+    pub w_supervised: f64,
+    pub w_bytecode: f64,
+    pub w_anomaly: f64,
+}
+
+impl Default for CompositeRiskScorer {
+    fn default() -> Self {
+        Self {
+            w_heuristics: 0.35,
+            w_taint: 0.25,
+            w_supervised: 0.20,
+            w_bytecode: 0.12,
+            w_anomaly: 0.08,
+        }
+    }
+}
+
+impl CompositeRiskScorer {
