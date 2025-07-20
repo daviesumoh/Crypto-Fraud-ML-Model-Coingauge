@@ -829,3 +829,43 @@ impl CompositeRiskScorer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common_types::{FinalityStatus, PermissionKind, PermissionMutation};
+
+    #[test]
+    fn quarantines_unsolicited_tornado_dust_attack_on_innocent_wallet() {
+        let engine = HeuristicsEngine::new();
+        let tornado = "0x910cbd523d972eb0a6f4cae4618ad62622b39dbf";
+        let vitalik = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+
+        let labels = vec![EntityLabel {
+            address: tornado.to_string(),
+            entity_name: "Tornado.Cash: 10 ETH".to_string(),
+            category: EntityCategory::Sanctioned,
+            source_feed: "OFAC_SDN".to_string(),
+            severity_weight: 1.0,
+            is_omnibus_sink: false,
+            is_sanctioned: true,
+        }];
+
+        // Attacker sends $0.45 dust from Tornado Cash to innocent wallet; recipient never co-spends it
+        let edges = vec![GraphTransferEdge {
+            tx_hash: "0xdust".to_string(),
+            from: tornado.to_string(),
+            to: vitalik.to_string(),
+            amount_usd: 0.45,
+            recipient_post_balance_usd: 500_000.0,
+            timestamp_sec: 1_730_000_000,
+            selector: "0x".to_string(),
+            recipient_is_fresh_nonce_zero: false,
+            recipient_has_outbound_cospend: false,
+        }];
+
+        let taint = engine.compute_taint_exposure(vitalik, None, 1_730_010_000, &edges, &labels);
+        assert_eq!(taint.max_taint_score, 0.0);
+        assert_eq!(taint.quarantined_dust_edges, 1);
+    }
+
+    #[test]
