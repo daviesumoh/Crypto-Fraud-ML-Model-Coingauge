@@ -712,3 +712,24 @@ impl Default for CompositeRiskScorer {
 }
 
 impl CompositeRiskScorer {
+    pub fn calibrate_isotonic(raw: f64) -> f64 {
+        let x = raw.clamp(0.0, 1.0);
+        const KNOTS: [(f64, f64); 6] = [
+            (0.00, 0.01),
+            (0.12, 0.14),
+            (0.28, 0.42),
+            (0.48, 0.72),
+            (0.70, 0.90),
+            (1.00, 0.99),
+        ];
+        for window in KNOTS.windows(2) {
+            let (x0, y0) = window[0];
+            let (x1, y1) = window[1];
+            if x <= x1 {
+                let t = (x - x0) / (x1 - x0);
+                return y0 + t * (y1 - y0);
+            }
+        }
+        0.99
+    }
+
