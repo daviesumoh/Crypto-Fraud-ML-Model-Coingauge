@@ -733,3 +733,99 @@ impl CompositeRiskScorer {
         0.99
     }
 
+    pub fn score(
+        &self,
+        evaluation_mode: &str,
+        chain_id: u64,
+        subject_address: &str,
+        counterparty_address: Option<String>,
+        tx_history_count: u64,
+        findings: Vec<HeuristicFinding>,
+        taint: &TaintExposureSummary,
+        simulation: Option<SimulationResult>,
+        ml: ModelPredictionBundle,
+        forensic_brief: Option<ForensicBrief>,
+        total_latency_ms: f64,
+    ) -> CompositeRiskReport {
+        let total_rule_weight: f64 = findings.iter().map(|f| f.severity.weight()).sum();
+        let h_signal = 1.0 - (-total_rule_weight).exp();
+        let t_signal = taint.max_taint_score.clamp(0.0, 1.0);
+        let s_signal = ml.supervised_fraud_prob.clamp(0.0, 1.0);
+        let b_signal = ml.bytecode_risk_score.clamp(0.0, 1.0);
+        let a_signal = ml.anomaly_score.clamp(0.0, 1.0);
+
+        let raw_ensemble = self.w_heuristics * h_signal
+            + self.w_taint * t_signal
+            + self.w_supervised * s_signal
+            + self.w_bytecode * b_signal
+            + self.w_anomaly * a_signal;
+
+        let calibrated = Self::calibrate_isotonic(raw_ensemble);
+        let critical_veto = findings.iter().any(|f| f.triggers_critical_veto);
+
+        let final_prob = if critical_veto {
+            calibrated.max(0.95)
+        } else {
+            calibrated
+        };
+
+        let risk_score = (final_prob * 100.0).round().clamp(0.0, 100.0) as u8;
+
+        let (risk_tier, policy_action) = match risk_score {
+            0..=24 => (RiskTier::Low, PolicyAction::Allow),
+            25..=54 => (RiskTier::Medium, PolicyAction::Warn),
+            55..=79 => (
+                RiskTier::High,
+                if evaluation_mode == "PRE_SIGN_TX" {
+                    PolicyAction::Warn
+                } else {
+                    PolicyAction::Hold
+                },
+            ),
+            _ => (RiskTier::Critical, PolicyAction::Block),
+        };
+
+        let has_sim = if simulation.is_some() { 1.0 } else { 0.0 };
+        let confidence_score =
+            (1.0 - (-(tx_history_count as f64) / 25.0).exp() * (1.0 - has_sim * 0.65))
+                .clamp(0.15, 0.99);
+
+        CompositeRiskReport {
+            evaluation_id: Uuid::new_v4(),
+            evaluated_at: Utc::now(),
+            evaluation_mode: evaluation_mode.to_string(),
+            chain_id,
+            block_number: None,
+            tx_hash: None,
+            method_selector: None,
+            decoded_function: None,
+            tx_value_native: None,
+            tx_value_usd: None,
+            gas_price_gwei: None,
+            subject_address: normalize_address(subject_address),
+            subject_label: None,
+            counterparty_address: counterparty_address.map(|c| normalize_address(&c)),
+            counterparty_label: None,
+            risk_score,
+            risk_tier,
+            confidence_score,
+            policy_action,
+            ensemble_breakdown: EnsembleBreakdown {
+                heuristic_signal: h_signal,
+                taint_exposure_signal: t_signal,
+                supervised_ml_signal: s_signal,
+                bytecode_risk_signal: b_signal,
+                anomaly_signal: a_signal,
+                raw_ensemble_score: raw_ensemble,
+                calibrated_probability: calibrated,
+                critical_veto_applied: critical_veto,
+            },
+            heuristic_findings: findings,
+            simulation_summary: simulation,
+            ml_predictions: ml,
+            forensic_brief,
+            total_latency_ms,
+        }
+    }
+}
+
