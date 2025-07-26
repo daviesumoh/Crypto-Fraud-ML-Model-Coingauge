@@ -869,3 +869,62 @@ mod tests {
     }
 
     #[test]
+    fn terminates_taint_at_cex_omnibus_hot_wallet() {
+        let engine = HeuristicsEngine::new();
+        let hacker = "0x1111111111111111111111111111111111111111";
+        let binance_hot = "0x28c6c06298d514db089934071355e5743bf21d60";
+        let retail_user = "0x3333333333333333333333333333333333333333";
+
+        let labels = vec![
+            EntityLabel {
+                address: hacker.to_string(),
+                entity_name: "Bridge Exploiter".to_string(),
+                category: EntityCategory::Exploiter,
+                source_feed: "CHAINABUSE".to_string(),
+                severity_weight: 1.0,
+                is_omnibus_sink: false,
+                is_sanctioned: false,
+            },
+            EntityLabel {
+                address: binance_hot.to_string(),
+                entity_name: "Binance Hot Wallet 14".to_string(),
+                category: EntityCategory::CexOmnibus,
+                source_feed: "INTERNAL_ATTRIBUTION".to_string(),
+                severity_weight: 0.0,
+                is_omnibus_sink: true,
+                is_sanctioned: false,
+            },
+        ];
+
+        let edges = vec![
+            GraphTransferEdge {
+                tx_hash: "0xhop1".to_string(),
+                from: hacker.to_string(),
+                to: binance_hot.to_string(),
+                amount_usd: 100_000.0,
+                recipient_post_balance_usd: 50_000_000.0,
+                timestamp_sec: 1_730_000_000,
+                selector: "0x".to_string(),
+                recipient_is_fresh_nonce_zero: false,
+                recipient_has_outbound_cospend: true,
+            },
+            GraphTransferEdge {
+                tx_hash: "0xhop2".to_string(),
+                from: binance_hot.to_string(),
+                to: retail_user.to_string(),
+                amount_usd: 2_500.0,
+                recipient_post_balance_usd: 2_500.0,
+                timestamp_sec: 1_730_001_000,
+                selector: "0x".to_string(),
+                recipient_is_fresh_nonce_zero: false,
+                recipient_has_outbound_cospend: true,
+            },
+        ];
+
+        let taint =
+            engine.compute_taint_exposure(retail_user, None, 1_730_002_000, &edges, &labels);
+        assert_eq!(taint.max_taint_score, 0.0);
+        assert_eq!(taint.terminated_at_omnibus_sinks, 1);
+    }
+
+    #[test]
