@@ -928,3 +928,88 @@ mod tests {
     }
 
     #[test]
+    fn blocks_permit2_eoa_drainer_and_address_poisoning_with_critical_veto() {
+        let engine = HeuristicsEngine::new();
+        let scorer = CompositeRiskScorer::default();
+
+        let victim = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let trusted = "0x1234567890abcdef1234567890abcdef12349abc";
+        let poison = "0x1234000000000000000000000000000000009abc";
+
+        let tx = CanonicalTransaction {
+            chain_id: 1,
+            block_number: 21_200_000,
+            block_hash: "0x01".to_string(),
+            parent_hash: "0x00".to_string(),
+            tx_hash: "0x02".to_string(),
+            timestamp_sec: 1_730_500_000,
+            finality_status: FinalityStatus::Pending,
+            sender: victim.to_string(),
+            recipient: Some(poison.to_string()),
+            value_wei: 1_000_000_000_000_000_000,
+            value_usd: 3200.0,
+            calldata_hex: "0x".to_string(),
+            gas_limit: 21_000,
+            max_fee_per_gas_wei: 25_000_000_000,
+            priority_fee_per_gas_wei: 1_000_000_000,
+            block_priority_fee_percentile: 40.0,
+            nonce: 42,
+            blocks_since_last_inbound_funding: Some(500),
+            sender_pre_balance_usd: 15_000.0,
+        };
+
+        let sim = SimulationResult {
+            success: true,
+            permission_mutations: vec![PermissionMutation {
+                kind: PermissionKind::UniswapPermit2,
+                owner: victim.to_string(),
+                spender: poison.to_string(),
+                token_address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48".to_string(),
+                is_unlimited: true,
+                allowance_usd: 1_000_000_000.0,
+                expiration_sec: None,
+            }],
+            ..Default::default()
+        };
+
+        let history = WalletHistoryContext {
+            total_tx_count: 80,
+            frequent_counterparties: vec![trusted.to_string()],
+            prior_zero_or_dust_senders: vec![poison.to_string()],
+        };
+
+        let (findings, taint) = engine.evaluate_all(&HeuristicEvaluationContext {
+            subject_address: victim,
+            current_timestamp_sec: 1_730_500_000,
+            transaction: Some(&tx),
+            simulation: Some(&sim),
+            wallet_history: &history,
+            graph_edges: &[],
+            contracts: &[],
+            entity_labels: &[],
+        });
+
+        assert!(findings.iter().any(|f| f.rule_id == "H-APP-01"));
+        assert!(findings.iter().any(|f| f.rule_id == "H-SOC-01"));
+
+        let report = scorer.score(
+            "PRE_SIGN_TX",
+            1,
+            victim,
+            Some(poison.to_string()),
+            80,
+            findings,
+            &taint,
+            Some(sim),
+            ModelPredictionBundle::default(),
+            None,
+            14.2,
+        );
+
+        assert!(report.risk_score >= 95);
+        assert_eq!(report.risk_tier, RiskTier::Critical);
+        assert_eq!(report.policy_action, PolicyAction::Block);
+        assert!(report.ensemble_breakdown.critical_veto_applied);
+    }
+
+    #[test]
