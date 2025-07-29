@@ -1013,3 +1013,62 @@ mod tests {
     }
 
     #[test]
+    fn ignores_unseeded_zero_delegatecall_but_flags_nonzero_untrusted_delegatecall() {
+        let engine = HeuristicsEngine::new();
+        let caller = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let proxy = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        let unseeded_sim = SimulationResult {
+            success: true,
+            internal_traces: vec![common_types::InternalCallTrace {
+                depth: 1,
+                call_type: CallType::DelegateCall,
+                caller: caller.to_string(),
+                target: "0x0000000000000000000000000000000000000000".to_string(),
+                value_wei: 0,
+                selector: "0x12345678".to_string(),
+                reverted: false,
+            }],
+            ..Default::default()
+        };
+
+        let (findings_zero, _) = engine.evaluate_all(&HeuristicEvaluationContext {
+            subject_address: caller,
+            current_timestamp_sec: 1_730_500_000,
+            transaction: None,
+            simulation: Some(&unseeded_sim),
+            wallet_history: &WalletHistoryContext::default(),
+            graph_edges: &[],
+            contracts: &[],
+            entity_labels: &[],
+        });
+        assert!(!findings_zero.iter().any(|f| f.rule_id == "H-EVM-01"));
+
+        let nonzero_sim = SimulationResult {
+            success: true,
+            internal_traces: vec![common_types::InternalCallTrace {
+                depth: 1,
+                call_type: CallType::DelegateCall,
+                caller: proxy.to_string(),
+                target: "0xcccccccccccccccccccccccccccccccccccccccc".to_string(),
+                value_wei: 0,
+                selector: "0x12345678".to_string(),
+                reverted: false,
+            }],
+            ..Default::default()
+        };
+
+        let (findings_nonzero, _) = engine.evaluate_all(&HeuristicEvaluationContext {
+            subject_address: caller,
+            current_timestamp_sec: 1_730_500_000,
+            transaction: None,
+            simulation: Some(&nonzero_sim),
+            wallet_history: &WalletHistoryContext::default(),
+            graph_edges: &[],
+            contracts: &[],
+            entity_labels: &[],
+        });
+        assert!(findings_nonzero.iter().any(|f| f.rule_id == "H-EVM-01"));
+    }
+}
+
