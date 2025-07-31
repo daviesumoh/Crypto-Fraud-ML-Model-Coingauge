@@ -4,6 +4,7 @@ members = [
     "crates/common-types",
     "crates/evm-simulator",
     "crates/heuristics-engine",
+    "crates/chain-indexer",
 ]
 
 [workspace.package]
