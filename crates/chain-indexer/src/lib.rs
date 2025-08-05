@@ -148,3 +148,19 @@ impl CanonicalChainTracker {
             self.window.pop_front();
         }
 
+        if let Some(head_num) = self.head_number() {
+            for (blk, _, status) in &mut self.window {
+                let depth = head_num.saturating_sub(blk.number);
+                if depth >= self.finalized_confirmations {
+                    *status = FinalityStatus::Finalized;
+                } else if depth >= self.safe_confirmations {
+                    *status = FinalityStatus::Safe;
+                }
+            }
+        }
+
+        Ok(mutations)
+    }
+}
+
+#[derive(Clone)]
