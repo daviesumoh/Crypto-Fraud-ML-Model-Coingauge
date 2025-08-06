@@ -164,3 +164,122 @@ impl CanonicalChainTracker {
 }
 
 #[derive(Clone)]
+pub struct ManagedJsonRpcProvider {
+    rpc_url: String,
+    http: reqwest::Client,
+}
+
+impl ManagedJsonRpcProvider {
+    pub fn new(rpc_url: impl Into<String>) -> Self {
+        Self {
+            rpc_url: rpc_url.into(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn rpc_url(&self) -> &str {
+        &self.rpc_url
+    }
+
+    pub async fn rpc_call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, IndexerError> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        });
+        const MAX_ATTEMPTS: usize = 3;
+        let mut last_err = IndexerError::RpcTransport("unattempted".to_string());
+
+        for attempt in 0..MAX_ATTEMPTS {
+            if attempt > 0 {
+                let backoff_ms = 120 * (1u64 << (attempt - 1));
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+
+            let http_resp = match self.http.post(&self.rpc_url).json(&body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = IndexerError::RpcTransport(e.to_string());
+                    continue;
+                }
+            };
+
+            let status = http_resp.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                last_err = IndexerError::RateLimited;
+                continue;
+            }
+
+            let raw_text = match http_resp.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    last_err = IndexerError::RpcTransport(e.to_string());
+                    continue;
+                }
+            };
+
+            if !status.is_success() {
+                let snippet: String = raw_text.chars().take(160).collect();
+                let err = IndexerError::RpcProtocol(format!("HTTP {}: {}", status, snippet.trim()));
+                if status.is_server_error() {
+                    last_err = err;
+                    continue;
+                }
+                return Err(err);
+            }
+
+            let resp: serde_json::Value = serde_json::from_str(&raw_text).map_err(|e| {
+                let snippet: String = raw_text.chars().take(120).collect();
+                IndexerError::RpcProtocol(format!("invalid JSON-RPC response ({e}): {}", snippet.trim()))
+            })?;
+
+            if let Some(err) = resp.get("error") {
+                let err_msg = err.to_string();
+                if err_msg.contains("429") || err_msg.to_ascii_lowercase().contains("rate limit") {
+                    last_err = IndexerError::RateLimited;
+                    continue;
+                }
+                return Err(IndexerError::RpcProtocol(err_msg));
+            }
+            return Ok(resp["result"].clone());
+        }
+
+        Err(last_err)
+    }
+
+    pub async fn get_latest_block_number(&self) -> Result<u64, IndexerError> {
+        let res = self.rpc_call("eth_blockNumber", serde_json::json!([])).await?;
+        let hex_str = res.as_str().ok_or_else(|| {
+            IndexerError::RpcProtocol("missing hex string in eth_blockNumber result".to_string())
+        })?;
+        Ok(parse_hex_u64(hex_str))
+    }
+
+    pub async fn get_block_by_number(
+        &self,
+        block_num: u64,
+        include_txs: bool,
+    ) -> Result<serde_json::Value, IndexerError> {
+        let hex_num = format!("0x{:x}", block_num);
+        self.rpc_call("eth_getBlockByNumber", serde_json::json!([hex_num, include_txs]))
+            .await
+    }
+
+    pub async fn fetch_ingested_block(
+        &self,
+        chain_id: u64,
+        block_num: u64,
+        eth_price_usd: f64,
+    ) -> Result<IngestedBlock, IndexerError> {
+        let block_json = self.get_block_by_number(block_num, true).await?;
+        parse_rpc_block(chain_id, &block_json, eth_price_usd)
+    }
+
