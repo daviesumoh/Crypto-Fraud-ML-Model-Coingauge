@@ -283,3 +283,30 @@ impl ManagedJsonRpcProvider {
         parse_rpc_block(chain_id, &block_json, eth_price_usd)
     }
 
+    pub async fn fetch_chainlink_eth_usd_price(&self, chain_id: u64) -> Option<f64> {
+        let feed_addr = match chain_id {
+            1 => "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+            8453 => "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
+            _ => "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+        };
+        let call_obj = serde_json::json!({
+            "to": feed_addr,
+            "data": "0x50d25bcd"
+        });
+        let res = self
+            .rpc_call("eth_call", serde_json::json!([call_obj, "latest"]))
+            .await
+            .ok()?;
+        let hex_str = res.as_str()?;
+        let raw_val = parse_hex_u128(hex_str);
+        if raw_val == 0 {
+            return None;
+        }
+        let price = (raw_val as f64) / 1e8;
+        if (100.0..=100_000.0).contains(&price) {
+            Some(price)
+        } else {
+            None
+        }
+    }
+
