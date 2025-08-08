@@ -366,3 +366,82 @@ impl ManagedJsonRpcProvider {
         Ok(hex_str.to_string())
     }
 
+    pub async fn fetch_alchemy_asset_transfers(
+        &self,
+        address: &str,
+        eth_price_usd: f64,
+    ) -> Vec<GraphTransferEdge> {
+        if !self.rpc_url.contains("alchemy.com") {
+            return Vec::new();
+        }
+        let clean = normalize_address(address);
+        let mut edges = Vec::new();
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        for direction in ["toAddress", "fromAddress"] {
+            let mut filter = serde_json::Map::new();
+            filter.insert("fromBlock".to_string(), serde_json::json!("0x0"));
+            filter.insert("toBlock".to_string(), serde_json::json!("latest"));
+            filter.insert(direction.to_string(), serde_json::json!(clean));
+            filter.insert(
+                "category".to_string(),
+                serde_json::json!(["external", "erc20"]),
+            );
+            filter.insert("maxCount".to_string(), serde_json::json!("0x14"));
+            filter.insert("order".to_string(), serde_json::json!("desc"));
+
+            if let Ok(res) = self
+                .rpc_call(
+                    "alchemy_getAssetTransfers",
+                    serde_json::json!([serde_json::Value::Object(filter)]),
+                )
+                .await
+            {
+                if let Some(transfers) = res.get("transfers").and_then(|t| t.as_array()) {
+                    for tr in transfers {
+                        let hash = tr
+                            .get("hash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0x")
+                            .to_string();
+                        let from = tr
+                            .get("from")
+                            .and_then(|v| v.as_str())
+                            .map(normalize_address)
+                            .unwrap_or_default();
+                        let to = tr
+                            .get("to")
+                            .and_then(|v| v.as_str())
+                            .map(normalize_address)
+                            .unwrap_or_default();
+                        let asset = tr.get("asset").and_then(|v| v.as_str()).unwrap_or("ETH");
+                        let val = tr.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let amount_usd = match asset.to_ascii_uppercase().as_str() {
+                            "ETH" | "WETH" => val * eth_price_usd,
+                            "USDC" | "USDT" | "DAI" | "USDBC" => val,
+                            _ => 0.0,
+                        };
+                        if !from.is_empty() && !to.is_empty() {
+                            edges.push(GraphTransferEdge {
+                                tx_hash: hash,
+                                from,
+                                to,
+                                amount_usd,
+                                recipient_post_balance_usd: amount_usd.max(100.0),
+                                timestamp_sec: now_ts,
+                                selector: "0x".to_string(),
+                                recipient_is_fresh_nonce_zero: false,
+                                recipient_has_outbound_cospend: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        edges
+    }
+}
+
