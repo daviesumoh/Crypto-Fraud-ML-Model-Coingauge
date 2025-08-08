@@ -310,3 +310,59 @@ impl ManagedJsonRpcProvider {
         }
     }
 
+    pub async fn get_balance(&self, address: &str) -> Result<u128, IndexerError> {
+        let norm = common_types::validate_and_normalize_address(address)
+            .map_err(|e| IndexerError::InvalidAddress(e.0))?;
+        let res = self
+            .rpc_call("eth_getBalance", serde_json::json!([norm, "latest"]))
+            .await?;
+        let hex_str = res.as_str().ok_or_else(|| {
+            IndexerError::RpcProtocol("missing hex string in eth_getBalance result".to_string())
+        })?;
+        Ok(parse_hex_u128(hex_str))
+    }
+
+    pub async fn get_transaction_count(&self, address: &str) -> Result<u64, IndexerError> {
+        let norm = common_types::validate_and_normalize_address(address)
+            .map_err(|e| IndexerError::InvalidAddress(e.0))?;
+        let res = self
+            .rpc_call(
+                "eth_getTransactionCount",
+                serde_json::json!([norm, "latest"]),
+            )
+            .await?;
+        let hex_str = res.as_str().ok_or_else(|| {
+            IndexerError::RpcProtocol(
+                "missing hex string in eth_getTransactionCount result".to_string(),
+            )
+        })?;
+        Ok(parse_hex_u64(hex_str))
+    }
+
+    pub async fn get_code(&self, address: &str) -> Result<String, IndexerError> {
+        let norm = common_types::validate_and_normalize_address(address)
+            .map_err(|e| IndexerError::InvalidAddress(e.0))?;
+        let res = self
+            .rpc_call("eth_getCode", serde_json::json!([norm, "latest"]))
+            .await?;
+        let hex_str = res.as_str().ok_or_else(|| {
+            IndexerError::RpcProtocol("missing hex string in eth_getCode result".to_string())
+        })?;
+        Ok(hex_str.to_string())
+    }
+
+    pub async fn get_storage_at(&self, address: &str, slot_hex: &str) -> Result<String, IndexerError> {
+        let norm = common_types::validate_and_normalize_address(address)
+            .map_err(|e| IndexerError::InvalidAddress(e.0))?;
+        let res = self
+            .rpc_call(
+                "eth_getStorageAt",
+                serde_json::json!([norm, slot_hex, "latest"]),
+            )
+            .await?;
+        let hex_str = res.as_str().ok_or_else(|| {
+            IndexerError::RpcProtocol("missing hex string in eth_getStorageAt result".to_string())
+        })?;
+        Ok(hex_str.to_string())
+    }
+
