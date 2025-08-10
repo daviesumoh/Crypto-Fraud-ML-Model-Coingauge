@@ -445,3 +445,55 @@ impl ManagedJsonRpcProvider {
     }
 }
 
+pub fn parse_hex_u64(val: &str) -> u64 {
+    let clean = val.trim().strip_prefix("0x").unwrap_or(val.trim());
+    u64::from_str_radix(clean, 16).unwrap_or(0)
+}
+
+pub fn parse_hex_u128(val: &str) -> u128 {
+    let clean = val.trim().strip_prefix("0x").unwrap_or(val.trim());
+    if clean.len() > 32 {
+        u128::from_str_radix(&clean[clean.len() - 32..], 16).unwrap_or(u128::MAX)
+    } else {
+        u128::from_str_radix(clean, 16).unwrap_or(0)
+    }
+}
+
+pub fn decode_method_selector(calldata_hex: &str) -> (String, String) {
+    let clean = calldata_hex.trim().strip_prefix("0x").unwrap_or(calldata_hex.trim());
+    if clean.len() < 8 {
+        return ("0x".to_string(), "Native Transfer".to_string());
+    }
+    let selector = format!("0x{}", clean[..8].to_ascii_lowercase());
+    let name = match selector.as_str() {
+        "0xa9059cbb" => "transfer(address,uint256)",
+        "0x095ea7b3" => "approve(address,uint256)",
+        "0x23b872dd" => "transferFrom(address,address,uint256)",
+        "0x39509351" => "increaseAllowance(address,uint256)",
+        "0xa22cb465" => "setApprovalForAll(address,bool)",
+        "0xd505accf" => "permit(address,address,uint256,...)",
+        "0x87517c45" => "Permit2.approve(address,address,uint160,uint48)",
+        "0x2b67b570" => "Permit2.permit(address,PermitSingle,bytes)",
+        "0x3593564c" => "UniversalRouter.execute(bytes,bytes[],uint256)",
+        "0x24856bc3" => "UniversalRouter.execute(bytes,bytes[])",
+        "0x5ae401dc" | "0xac9650d8" => "multicall(bytes[])",
+        "0x04e45aaf" => "exactInputSingle(ExactInputSingleParams)",
+        "0xb858183f" => "exactInput(ExactInputParams)",
+        "0x38ed1739" => "swapExactTokensForTokens(...)",
+        "0x7ff36ab5" => "swapExactETHForTokens(...)",
+        "0x18cbafe5" => "swapExactTokensForETH(...)",
+        "0xd0e30db0" => "deposit()",
+        "0x2e1a7d4d" => "withdraw(uint256)",
+        "0x617ba037" => "supply(address,uint256,address,uint16)",
+        "0x69328dec" => "withdraw(address,uint256,address)",
+        "0x1249c58b" => "mint()",
+        "0x40c10f19" => "mint(address,uint256)",
+        "0x42842e0e" => "safeTransferFrom(address,address,uint256)",
+        "0xfb0f3ee1" => "Seaport.fulfillBasicOrder(...)",
+        "0xb2267a7b" => "Tornado.deposit(bytes32)",
+        "0x21a0adb6" => "Tornado.withdraw(bytes,bytes32,bytes32,address,address,uint256)",
+        _ => "Contract Call",
+    };
+    (selector, name.to_string())
+}
+
