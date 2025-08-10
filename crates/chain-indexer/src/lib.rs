@@ -497,3 +497,61 @@ pub fn decode_method_selector(calldata_hex: &str) -> (String, String) {
     (selector, name.to_string())
 }
 
+fn estimate_erc20_calldata_usd(
+    target_address: Option<&str>,
+    calldata_hex: &str,
+    eth_price_usd: f64,
+) -> Option<f64> {
+    let target = normalize_address(target_address?);
+    let clean = calldata_hex.trim().strip_prefix("0x").unwrap_or(calldata_hex.trim());
+    if clean.len() < 8 {
+        return None;
+    }
+    let selector = &clean[..8].to_ascii_lowercase();
+    let amount_hex = match selector.as_str() {
+        "a9059cbb" if clean.len() >= 136 => &clean[72..136],
+        "23b872dd" if clean.len() >= 200 => &clean[136..200],
+        _ => return None,
+    };
+    let raw = parse_hex_u128(amount_hex);
+    if raw == 0 || raw == u128::MAX {
+        return None;
+    }
+
+    match target.as_str() {
+        // USDT (6 decimals), USDC Ethereum (6 decimals), USDC Base (6 decimals)
+        "0xdac17f958d2ee523a2206206994597c13d831ec7"
+        | "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        | "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" => {
+            let usd = (raw as f64) / 1e6;
+            if usd <= 1_000_000_000.0 {
+                Some(usd)
+            } else {
+                None
+            }
+        }
+        // DAI (18 decimals)
+        "0x6b175474e89094c44da98b954eedeac495271d0f"
+        | "0x50c5725949a6f0c72e6c4a641f24049a917db0cb" => {
+            let usd = (raw as f64) / 1e18;
+            if usd <= 1_000_000_000.0 {
+                Some(usd)
+            } else {
+                None
+            }
+        }
+        // WETH Ethereum & Base (18 decimals)
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+        | "0x4200000000000000000000000000000000000006"
+        | "0xae7ab96520de3a18e5e111b5eaab095312d7fe84" => {
+            let eth = (raw as f64) / 1e18;
+            if eth <= 500_000.0 {
+                Some(eth * eth_price_usd)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
