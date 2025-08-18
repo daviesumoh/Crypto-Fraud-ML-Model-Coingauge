@@ -555,3 +555,70 @@ fn estimate_erc20_calldata_usd(
     }
 }
 
+pub fn parse_rpc_transaction(
+    chain_id: u64,
+    block_number: u64,
+    block_hash: &str,
+    parent_hash: &str,
+    block_timestamp_sec: u64,
+    tx: &serde_json::Value,
+    eth_price_usd: f64,
+) -> Option<CanonicalTransaction> {
+    let hash = tx.get("hash")?.as_str()?.to_string();
+    let from = tx.get("from")?.as_str()?.to_string();
+    let to = tx.get("to").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+    let calldata_hex = tx
+        .get("input")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x")
+        .to_string();
+    let gas_hex = tx.get("gas").and_then(|v| v.as_str()).unwrap_or("0x5208");
+    let max_fee_hex = tx
+        .get("maxFeePerGas")
+        .or_else(|| tx.get("gasPrice"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+    let prio_fee_hex = tx
+        .get("maxPriorityFeePerGas")
+        .or_else(|| tx.get("gasPrice"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+    let nonce_hex = tx.get("nonce").and_then(|v| v.as_str()).unwrap_or("0x0");
+
+    let value_wei = parse_hex_u128(value_hex);
+    let gas_limit = parse_hex_u64(gas_hex);
+    let max_fee_wei = parse_hex_u128(max_fee_hex);
+    let prio_fee_wei = parse_hex_u128(prio_fee_hex);
+    let nonce = parse_hex_u64(nonce_hex);
+
+    let native_usd = (value_wei as f64 / 1e18) * eth_price_usd;
+    let value_usd = if native_usd > 0.0 {
+        native_usd
+    } else {
+        estimate_erc20_calldata_usd(to.as_deref(), &calldata_hex, eth_price_usd).unwrap_or(0.0)
+    };
+
+    Some(CanonicalTransaction {
+        chain_id,
+        block_number,
+        block_hash: block_hash.to_string(),
+        parent_hash: parent_hash.to_string(),
+        tx_hash: hash,
+        timestamp_sec: block_timestamp_sec,
+        finality_status: FinalityStatus::Pending,
+        sender: from,
+        recipient: to,
+        value_wei,
+        value_usd,
+        calldata_hex,
+        gas_limit,
+        max_fee_per_gas_wei: max_fee_wei,
+        priority_fee_per_gas_wei: prio_fee_wei,
+        block_priority_fee_percentile: 50.0,
+        nonce,
+        blocks_since_last_inbound_funding: None,
+        sender_pre_balance_usd: (value_usd * 4.0).max(500.0),
+    })
+}
+
