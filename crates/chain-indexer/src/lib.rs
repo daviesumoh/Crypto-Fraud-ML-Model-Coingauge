@@ -622,3 +622,73 @@ pub fn parse_rpc_transaction(
     })
 }
 
+pub fn parse_rpc_block(
+    chain_id: u64,
+    block_json: &serde_json::Value,
+    eth_price_usd: f64,
+) -> Result<IngestedBlock, IndexerError> {
+    let number_hex = block_json
+        .get("number")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IndexerError::RpcProtocol("missing block number".to_string()))?;
+    let hash = block_json
+        .get("hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x")
+        .to_string();
+    let parent_hash = block_json
+        .get("parentHash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x")
+        .to_string();
+    let ts_hex = block_json
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+
+    let block_number = parse_hex_u64(number_hex);
+    let timestamp_sec = parse_hex_u64(ts_hex);
+
+    let mut transactions = Vec::new();
+    if let Some(txs_array) = block_json.get("transactions").and_then(|t| t.as_array()) {
+        for tx_val in txs_array {
+            if tx_val.is_object() {
+                if let Some(canonical) = parse_rpc_transaction(
+                    chain_id,
+                    block_number,
+                    &hash,
+                    &parent_hash,
+                    timestamp_sec,
+                    tx_val,
+                    eth_price_usd,
+                ) {
+                    transactions.push(canonical);
+                }
+            }
+        }
+    }
+
+    if transactions.len() > 1 {
+        let mut sorted_fees: Vec<u128> = transactions
+            .iter()
+            .map(|t| t.priority_fee_per_gas_wei.max(t.max_fee_per_gas_wei))
+            .collect();
+        sorted_fees.sort_unstable();
+        let n = (sorted_fees.len() - 1) as f64;
+        for tx in &mut transactions {
+            let fee = tx.priority_fee_per_gas_wei.max(tx.max_fee_per_gas_wei);
+            let rank = sorted_fees.partition_point(|&f| f < fee) as f64;
+            tx.block_priority_fee_percentile = ((rank / n) * 100.0).clamp(1.0, 99.9);
+        }
+    }
+
+    Ok(IngestedBlock {
+        chain_id,
+        number: block_number,
+        hash,
+        parent_hash,
+        timestamp_sec,
+        transactions,
+    })
+}
+
