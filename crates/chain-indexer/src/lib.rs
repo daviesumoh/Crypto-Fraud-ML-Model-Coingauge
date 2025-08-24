@@ -1087,3 +1087,85 @@ pub fn lookup_entity_name(address: &str, labels: &[EntityLabel]) -> Option<Strin
         .map(|l| l.entity_name.clone())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn mk_block(num: u64, hash: &str, parent: &str) -> IngestedBlock {
+        IngestedBlock {
+            chain_id: 1,
+            number: num,
+            hash: hash.to_string(),
+            parent_hash: parent.to_string(),
+            timestamp_sec: 1_730_000_000 + num * 12,
+            transactions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn handles_three_block_reorg_with_exact_collapsing_state_convergence() {
+        let mut tracker = CanonicalChainTracker::new(1, 64, 4, 8);
+        let mut clickhouse_collapsed: HashMap<(u64, String), i64> = HashMap::new();
+
+        let mut apply_to_olap = |muts: Vec<VersionedBlockMutation>| {
+            for m in muts {
+                *clickhouse_collapsed
+                    .entry((m.block_number, m.block_hash))
+                    .or_insert(0) += m.sign as i64;
+            }
+        };
+
+        apply_to_olap(tracker.apply_block(mk_block(100, "0xh100", "0xh99")).unwrap());
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(101, "0xh101a", "0xh100"))
+                .unwrap(),
+        );
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(102, "0xh102a", "0xh101a"))
+                .unwrap(),
+        );
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(103, "0xh103a", "0xh102a"))
+                .unwrap(),
+        );
+
+        let reorg_muts = tracker
+            .apply_block(mk_block(101, "0xh101b", "0xh100"))
+            .unwrap();
+        assert_eq!(reorg_muts.iter().filter(|m| m.sign == -1).count(), 3);
+        assert_eq!(reorg_muts.iter().filter(|m| m.sign == 1).count(), 1);
+        apply_to_olap(reorg_muts);
+
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(102, "0xh102b", "0xh101b"))
+                .unwrap(),
+        );
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(103, "0xh103b", "0xh102b"))
+                .unwrap(),
+        );
+        apply_to_olap(
+            tracker
+                .apply_block(mk_block(104, "0xh104b", "0xh103b"))
+                .unwrap(),
+        );
+
+        let active_blocks: Vec<(u64, String)> = clickhouse_collapsed
+            .into_iter()
+            .filter(|(_, net_sign)| *net_sign > 0)
+            .map(|(k, _)| k)
+            .collect();
+
+        assert_eq!(active_blocks.len(), 5);
+        assert!(active_blocks.contains(&(100, "0xh100".to_string())));
+        assert!(active_blocks.contains(&(101, "0xh101b".to_string())));
+        assert!(active_blocks.contains(&(104, "0xh104b".to_string())));
+        assert!(!active_blocks.iter().any(|(_, h)| h.ends_with('a')));
+    }
+
