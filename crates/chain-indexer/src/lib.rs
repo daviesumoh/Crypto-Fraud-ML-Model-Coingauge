@@ -1040,3 +1040,50 @@ pub fn canonical_entity_registry() -> (Vec<EntityLabel>, Vec<ContractArtifact>) 
 }
 
 #[derive(Deserialize)]
+struct RawThreatIntelEntry {
+    address: String,
+    name: String,
+    category: String,
+    source: String,
+}
+
+pub fn load_threat_intel_map() -> std::collections::HashMap<String, EntityLabel> {
+    let raw_json = include_str!("../data/threat_intel.json");
+    let entries: Vec<RawThreatIntelEntry> = serde_json::from_str(raw_json).unwrap_or_default();
+    let mut map = std::collections::HashMap::with_capacity(entries.len() + 32);
+
+    let (canonical, _) = canonical_entity_registry();
+    for lbl in canonical {
+        map.insert(normalize_address(&lbl.address), lbl);
+    }
+
+    for entry in entries {
+        let addr = normalize_address(&entry.address);
+        let cat = match entry.category.as_str() {
+            "WalletDrainer" => EntityCategory::WalletDrainer,
+            "Exploiter" => EntityCategory::Exploiter,
+            "Sanctioned" => EntityCategory::Sanctioned,
+            _ => EntityCategory::Phishing,
+        };
+        let is_sanc = matches!(cat, EntityCategory::Sanctioned);
+        map.entry(addr.clone()).or_insert(EntityLabel {
+            address: addr,
+            entity_name: entry.name,
+            category: cat,
+            source_feed: entry.source,
+            severity_weight: 0.96,
+            is_omnibus_sink: false,
+            is_sanctioned: is_sanc,
+        });
+    }
+    map
+}
+
+pub fn lookup_entity_name(address: &str, labels: &[EntityLabel]) -> Option<String> {
+    let norm = normalize_address(address);
+    labels
+        .iter()
+        .find(|l| normalize_address(&l.address) == norm)
+        .map(|l| l.entity_name.clone())
+}
+
