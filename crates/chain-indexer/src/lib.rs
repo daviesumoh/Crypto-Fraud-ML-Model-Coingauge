@@ -1169,3 +1169,34 @@ mod tests {
         assert!(!active_blocks.iter().any(|(_, h)| h.ends_with('a')));
     }
 
+    async fn spawn_mock_http_sequence(responses: Vec<&'static str>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for raw_http in responses {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(raw_http.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn rpc_call_retries_transient_503_and_returns_result() {
+        let url = spawn_mock_http_sequence(vec![
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 11\r\n\r\nunavailable",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x10\"}",
+        ])
+        .await;
+        let provider = ManagedJsonRpcProvider::new(url);
+        let latest = provider.get_latest_block_number().await.unwrap();
+        assert_eq!(latest, 16);
+    }
+
+    #[tokio::test]
