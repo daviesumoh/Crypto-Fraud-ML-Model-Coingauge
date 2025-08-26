@@ -1200,3 +1200,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_call_returns_rate_limited_after_exhausting_429_retries() {
+        let resp429 = "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 10\r\n\r\nrate_limit";
+        let url = spawn_mock_http_sequence(vec![resp429, resp429, resp429]).await;
+        let provider = ManagedJsonRpcProvider::new(url);
+        let err = provider.get_latest_block_number().await.unwrap_err();
+        assert!(matches!(err, IndexerError::RateLimited));
+    }
+
+    #[tokio::test]
