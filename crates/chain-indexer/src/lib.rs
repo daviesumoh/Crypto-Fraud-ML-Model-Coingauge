@@ -1209,3 +1209,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_call_surfaces_non_json_http_400_error_cleanly() {
+        let url = spawn_mock_http_sequence(vec![
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 14\r\n\r\nbad method arg",
+        ])
+        .await;
+        let provider = ManagedJsonRpcProvider::new(url);
+        let err = provider.get_latest_block_number().await.unwrap_err();
+        match err {
+            IndexerError::RpcProtocol(msg) => assert!(msg.contains("400")),
+            other => panic!("expected RpcProtocol error, got {other:?}"),
+        }
+    }
+}
