@@ -176,3 +176,52 @@ class BytecodeSimilarityIndex:
         has_selfdestruct = "SELFDESTRUCT" in op_set
         has_create2 = "CREATE2" in op_set
 
+        env_countdown = 0
+        has_env_evasion = False
+        for op in ops:
+            if op in ("COINBASE", "GASPRICE", "PREVRANDAO"):
+                env_countdown = 6
+            elif env_countdown > 0:
+                if op == "JUMPI":
+                    has_env_evasion = True
+                    break
+                env_countdown -= 1
+
+        q = compute_opcode_embedding(bytecode_hex)
+        best_family: Optional[str] = None
+        best_sim: float = 0.0
+
+        if float(np.linalg.norm(q)) > 0.0:
+            for name, ref_vec in self._families:
+                sim = float(np.dot(q, ref_vec))
+                if sim > best_sim:
+                    best_sim = sim
+                    best_family = name
+
+        matched_family = best_family if best_sim >= 0.85 else None
+        reported_sim = round(best_sim, 4) if best_sim >= 0.25 else None
+
+        risk = 0.0
+        if best_sim >= 0.85:
+            risk += 0.55 * best_sim
+        if has_selfdestruct:
+            risk += 0.35
+        if has_env_evasion:
+            risk += 0.40
+        if has_create2 and has_selfdestruct:
+            risk += 0.30
+
+        return BytecodeAnalysis(
+            opcode_count=len(ops),
+            has_delegatecall=has_delegatecall,
+            has_selfdestruct=has_selfdestruct,
+            has_create2=has_create2,
+            has_env_evasion=has_env_evasion,
+            nearest_family=matched_family,
+            similarity=reported_sim,
+            risk_score=round(min(1.0, risk), 4),
+        )
+
+    def query(self, bytecode_hex: Optional[str]) -> Tuple[Optional[str], Optional[float]]:
+        res = self.analyze(bytecode_hex)
+        return res.nearest_family, res.similarity
