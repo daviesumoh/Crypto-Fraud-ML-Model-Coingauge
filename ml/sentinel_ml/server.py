@@ -182,3 +182,88 @@ def healthz() -> Dict[str, object]:
 
 
 @app.get("/v1/ml/metrics")
+def get_metrics() -> Dict[str, float]:
+    return REGISTRY.holdout_metrics
+
+
+@app.post("/v1/ml/bytecode-scan")
+def scan_bytecode(req: BytecodeScanRequest) -> Dict[str, object]:
+    ops = disassemble_evm_bytecode(req.bytecode_hex)
+    analysis = REGISTRY.bytecode_index.analyze(req.bytecode_hex)
+    return {
+        "opcode_count": analysis.opcode_count,
+        "opcode_preview": ops[:24],
+        "has_delegatecall": analysis.has_delegatecall,
+        "has_selfdestruct": analysis.has_selfdestruct,
+        "has_create2": analysis.has_create2,
+        "has_env_evasion": analysis.has_env_evasion,
+        "nearest_malicious_family": analysis.nearest_family,
+        "cosine_similarity": analysis.similarity,
+        "bytecode_risk_score": analysis.risk_score,
+    }
+
+
+@app.post("/v1/ml/infer", response_model=MlInferResponse)
+def infer(req: MlInferRequest) -> MlInferResponse:
+    t0 = time.perf_counter()
+
+    bc_analysis = REGISTRY.bytecode_index.analyze(req.target_bytecode_hex)
+    is_contract = (
+        req.is_contract_interaction
+        or bc_analysis.opcode_count > 0
+        or req.calldata_bytes > 0
+        or req.unlimited_approval
+        or req.unverified_contract_touch
+        or req.young_contract_touch
+    )
+    feat_ctx = FeatureInputContext(
+        tx_value_usd=req.tx_value_usd,
+        sender_pre_balance_usd=req.sender_pre_balance_usd,
+        priority_fee_percentile=req.priority_fee_percentile,
+        wallet_tx_count=req.wallet_tx_count,
+        young_contract_touch=req.young_contract_touch,
+        unverified_contract_touch=req.unverified_contract_touch,
+        unlimited_approval=req.unlimited_approval,
+        taint_score=req.taint_score,
+        peel_or_sybil_flag=req.peel_or_sybil_flag,
+        graph_edge_count=req.graph_edge_count,
+        calldata_bytes=req.calldata_bytes,
+        is_contract_interaction=is_contract,
+        bytecode_risk_score=bc_analysis.risk_score,
+    )
+    x = extract_feature_vector(feat_ctx)
+
+    anomaly_score = REGISTRY.anomaly_detector.score_single(x)
+    sup_prob, shap_items = REGISTRY.fraud_classifier.predict_with_attributions(x, top_k=5)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    brief = _build_diagnostic_brief(
+        req=req,
+        sup_prob=sup_prob,
+        anomaly_score=anomaly_score,
+        bytecode_risk=bc_analysis.risk_score,
+        bytecode_family=bc_analysis.nearest_family,
+        bytecode_sim=bc_analysis.similarity,
+        shap_items=shap_items,
+    )
+
+    return MlInferResponse(
+        predictions=ModelPredictionBundleOut(
+            anomaly_score=round(anomaly_score, 4),
+            supervised_fraud_prob=round(sup_prob, 4),
+            bytecode_risk_score=bc_analysis.risk_score,
+            nearest_bytecode_family=bc_analysis.nearest_family,
+            bytecode_similarity=bc_analysis.similarity,
+            top_shap_features=[
+                ShapAttributionOut(
+                    feature_name=it.feature_name,
+                    feature_value=it.feature_value,
+                    shap_impact=it.shap_impact,
+                    direction=it.direction,
+                )
+                for it in shap_items
+            ],
+            inference_latency_ms=round(elapsed_ms, 3),
+        ),
+        forensic_brief=brief,
+    )
