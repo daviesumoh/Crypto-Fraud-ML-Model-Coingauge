@@ -106,3 +106,79 @@ class BytecodeScanRequest(BaseModel):
     bytecode_hex: str
 
 
+def _build_diagnostic_brief(
+    req: MlInferRequest,
+    sup_prob: float,
+    anomaly_score: float,
+    bytecode_risk: float,
+    bytecode_family: Optional[str],
+    bytecode_sim: Optional[float],
+    shap_items: List[AttributionItem],
+) -> ForensicBriefOut:
+    _, sanitized = sanitize_metadata_note(req.untrusted_metadata_note)
+    citations: List[str] = [f"rule:{r}" for r in req.triggered_rule_ids]
+    for item in shap_items[:3]:
+        citations.append(f"shap:{item.feature_name}({item.shap_impact:+.3f})")
+    if bytecode_family and bytecode_sim is not None:
+        citations.append(f"bytecode:{bytecode_family}({bytecode_sim:.2f})")
+
+    is_critical = (
+        any(r in ("H-SIM-01", "H-APP-01", "H-SOC-01", "H-AML-01", "H-TOK-01") for r in req.triggered_rule_ids)
+        or sup_prob >= 0.78
+    )
+    is_warn = bool(req.triggered_rule_ids) or sup_prob >= 0.42 or anomaly_score >= 0.55
+
+    if is_critical:
+        action = "BLOCK_AND_REVOKE"
+        summary = (
+            f"High-confidence threat indicators on {req.subject_address[:10]}... "
+            f"(classifier={sup_prob:.1%}, anomaly={anomaly_score:.1%})."
+        )
+    elif is_warn:
+        action = "STEP_UP_WARNING"
+        summary = (
+            f"Elevated risk signals on {req.subject_address[:10]}... "
+            f"(classifier={sup_prob:.1%}, anomaly={anomaly_score:.1%})."
+        )
+    else:
+        action = "ALLOW_WITH_MONITORING"
+        summary = (
+            f"No abnormal execution or taint indicators detected for {req.subject_address[:10]}... "
+            f"(classifier={sup_prob:.1%}, anomaly={anomaly_score:.1%})."
+        )
+
+    details = [
+        f"Classifier={sup_prob:.3f}, Anomaly={anomaly_score:.3f}, BytecodeRisk={bytecode_risk:.3f}, Taint={req.taint_score:.3f}."
+    ]
+    if shap_items:
+        drivers = ", ".join(
+            f"{it.feature_name}={it.feature_value:.3f} ({it.shap_impact:+.3f})"
+            for it in shap_items[:3]
+        )
+        details.append(f"Primary feature drivers: {drivers}.")
+    if bytecode_family and bytecode_sim is not None:
+        details.append(f"Bytecode matches {bytecode_family} (cosine={bytecode_sim:.3f}).")
+
+    return ForensicBriefOut(
+        executive_summary=summary,
+        technical_forensics=" ".join(details),
+        recommended_action=action,
+        evidence_citations=citations,
+        prompt_injection_sanitized=sanitized,
+    )
+
+
+@app.get("/healthz")
+def healthz() -> Dict[str, object]:
+    onnx_active = getattr(REGISTRY.fraud_classifier, "_ort_session", None) is not None
+    return {
+        "status": "ok",
+        "service": "sentinel-ml",
+        "onnx_active": onnx_active,
+        "model_artifact": "model.onnx" if onnx_active else "sklearn_fallback",
+        "bytecode_signature_count": len(REGISTRY.bytecode_index._families),
+        "holdout_metrics": REGISTRY.holdout_metrics,
+    }
+
+
+@app.get("/v1/ml/metrics")
