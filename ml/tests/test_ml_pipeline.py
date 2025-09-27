@@ -85,3 +85,32 @@ def test_adversarial_prompt_injection_is_contained_and_cannot_lower_score() -> N
     assert body["predictions"]["inference_latency_ms"] < 50.0
 
 
+def test_bytecode_scan_handles_malformed_hex_and_concurrent_requests() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    client = TestClient(app)
+
+    empty_resp = client.post("/v1/ml/bytecode-scan", json={"bytecode_hex": "0xzz_invalid"})
+    assert empty_resp.status_code == 200
+    assert empty_resp.json()["opcode_count"] == 0
+    assert empty_resp.json()["bytecode_risk_score"] == 0.0
+
+    health_resp = client.get("/healthz")
+    assert health_resp.status_code == 200
+    health_data = health_resp.json()
+    assert health_data["bytecode_signature_count"] >= 250
+
+    payload = {
+        "subject_address": "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+        "chain_id": 1,
+        "tx_value_usd": 0.0,
+        "sender_pre_balance_usd": 0.0,
+        "priority_fee_percentile": 15.0,
+        "wallet_tx_count": 0,
+        "calldata_bytes": 0,
+    }
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: client.post("/v1/ml/infer", json=payload), range(8)))
+    for resp in results:
+        assert resp.status_code == 200
+        assert 0.0 < resp.json()["predictions"]["supervised_fraud_prob"] < 1.0
