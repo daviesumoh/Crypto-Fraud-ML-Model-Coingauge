@@ -282,3 +282,304 @@ def load_threat_feeds() -> Tuple[Dict[str, Tuple[str, str, str]], List[dict]]:
     return registry, exploit_rows
 
 
+def main() -> None:
+    print("=" * 72)
+    print("Web3 Sentinel: Real On-Chain Dataset & Malicious Bytecode Extractor")
+    print("=" * 72)
+
+    rpc_url = load_eth_rpc_url()
+    client = httpx.Client(timeout=20.0, headers={"User-Agent": "Web3Sentinel/1.0"})
+
+    registry, exploit_rows = load_threat_feeds()
+    print(f"[+] Consolidated Threat Registry: {len(registry):,} unique verified malicious addresses")
+
+    # Export Rust gateway consolidated threat intel feed
+    rust_intel_path = ROOT_DIR / "crates" / "chain-indexer" / "data" / "threat_intel.json"
+    rust_intel_path.parent.mkdir(parents=True, exist_ok=True)
+    intel_list = [
+        {"address": addr, "name": info[0], "category": info[1], "source": info[2]}
+        for addr, info in registry.items()
+    ]
+    rust_intel_path.write_text(json.dumps(intel_list, indent=None), encoding="utf-8")
+    print(f"[+] Saved Rust threat intel database ({len(intel_list):,} entries) -> {rust_intel_path}")
+
+    # Query Chainlink ETH/USD price
+    res_price = single_rpc(
+        client,
+        rpc_url,
+        "eth_call",
+        [{"to": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419", "data": "0x50d25bcd"}, "latest"],
+    )
+    eth_price = parse_hex_int(res_price) / 1e8 if res_price else 2500.0
+    if not (100.0 <= eth_price <= 100_000.0):
+        eth_price = 2500.0
+    print(f"[+] Live Chainlink ETH/USD price: ${eth_price:,.2f}")
+
+    benign_only = "--benign-only" in sys.argv
+    out_csv = DATA_DIR / "real_web3_training_dataset.csv"
+    dataset_rows: List[dict] = []
+
+    if benign_only and out_csv.exists():
+        with out_csv.open("r", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if int(r.get("is_attack", 0)) == 1:
+                    r["is_attack"] = 1
+                    dataset_rows.append(r)
+        print(f"[*] --benign-only: Loaded {len(dataset_rows)} existing Phase 1 attack rows from CSV.")
+    else:
+        dataset_rows.extend(_extract_phase1_attacks(client, rpc_url, eth_price, exploit_rows))
+
+    time.sleep(1.0)
+    dataset_rows.extend(_extract_phase2_benign(client, rpc_url, eth_price, registry))
+
+    fieldnames = ["source", "ref", "tag", "is_attack"] + FEATURE_NAMES
+    with out_csv.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(dataset_rows)
+
+    n_attack = sum(1 for r in dataset_rows if int(r["is_attack"]) == 1)
+    n_benign = sum(1 for r in dataset_rows if int(r["is_attack"]) == 0)
+    print(f"\n[+] Saved real on-chain dataset -> {out_csv}")
+    print(f"    Total Samples: {len(dataset_rows):,} ({n_attack:,} real attacks/exploits, {n_benign:,} live mainnet benign txs)")
+
+
+def _extract_phase1_attacks(
+    client: httpx.Client,
+    rpc_url: str,
+    eth_price: float,
+    exploit_rows: List[dict],
+) -> List[dict]:
+    print("\n[*] Phase 1: Querying live RPC for real Forta exploit txs & malicious contract bytecodes...")
+    # Sample up to 350 exploit contracts with creation_tx
+    seen_contracts: Set[str] = set()
+    sampled_exploits: List[dict] = []
+    for row in exploit_rows:
+        c_addr = (row.get("contract_address") or "").strip().lower()
+        c_tx = (row.get("contract_creation_tx") or "").strip().lower()
+        if c_addr and c_addr not in seen_contracts and c_addr.startswith("0x") and len(c_addr) == 42:
+            seen_contracts.add(c_addr)
+            sampled_exploits.append(row)
+        if len(sampled_exploits) >= 600:
+            break
+
+    # Also take up to 250 contract addresses flagged in Forta phishing_scams.csv
+    phish_contracts: List[Tuple[str, str]] = []
+    phish_eoas: List[Tuple[str, str]] = []
+    p_phish = DATA_DIR / "forta_phishing_scams.csv"
+    if p_phish.exists():
+        with p_phish.open("r", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                addr = (row.get("address") or "").strip().lower()
+                tag = (row.get("etherscan_tag") or "Phishing").strip()
+                is_c = (row.get("is_contract") or "").strip().lower() == "true"
+                if len(addr) == 42 and addr not in VERIFIED_BENIGN_PROTOCOLS:
+                    if is_c and len(phish_contracts) < 250 and addr not in seen_contracts:
+                        seen_contracts.add(addr)
+                        phish_contracts.append((addr, tag))
+                    elif not is_c and len(phish_eoas) < 150:
+                        phish_eoas.append((addr, tag))
+
+    # Also add active ScamSniffer drainers
+    ss_addrs = json.loads((DATA_DIR / "scamsniffer_addresses.json").read_text(encoding="utf-8"))
+    for a in ss_addrs[:150]:
+        addr = str(a).strip().lower()
+        if len(addr) == 42 and addr not in VERIFIED_BENIGN_PROTOCOLS:
+            phish_eoas.append((addr, "ScamSniffer_Drainer"))
+
+    all_mal_contract_addrs = [(r["contract_address"].strip().lower(), (r.get("contract_tag") or r.get("contract_creator_tag") or "Forta_Exploit").strip()) for r in sampled_exploits] + phish_contracts
+
+    print(f"    Batch fetching eth_getCode for {len(all_mal_contract_addrs)} verified malicious contracts...")
+    code_calls = [("eth_getCode", [addr, "latest"]) for addr, _ in all_mal_contract_addrs]
+    codes = batch_rpc(client, rpc_url, code_calls)
+
+    malicious_bytecodes: List[dict] = []
+    addr_to_bytecode_risk: Dict[str, float] = {}
+    for (addr, tag), code_hex in zip(all_mal_contract_addrs, codes):
+        if isinstance(code_hex, str) and len(code_hex) > 10:
+            brisk, stats = score_bytecode_structural(code_hex)
+            addr_to_bytecode_risk[addr] = brisk
+            # Save up to 250 real malicious bytecodes (truncate to 16KB hex max per record to stay compact)
+            if len(malicious_bytecodes) < 250:
+                malicious_bytecodes.append({
+                    "address": addr,
+                    "family": tag[:48] or "ExploitContract",
+                    "bytecode_hex": code_hex[:32768],
+                    "structural_risk": brisk,
+                    **stats,
+                })
+
+    bc_path = DATA_DIR / "malicious_bytecodes.json"
+    bc_path.write_text(json.dumps(malicious_bytecodes, indent=2), encoding="utf-8")
+    print(f"[+] Extracted and disassembled {len(malicious_bytecodes)} real malicious contract bytecodes -> {bc_path}")
+
+    # Fetch real exploit creation transactions
+    creation_txs = [
+        (r["contract_creation_tx"].strip().lower(), r["contract_address"].strip().lower(), (r.get("contract_creator") or "").strip().lower(), (r.get("contract_tag") or r.get("contract_creator_tag") or "Forta_Exploit").strip())
+        for r in sampled_exploits
+        if r.get("contract_creation_tx", "").strip().startswith("0x")
+    ]
+    print(f"    Batch fetching eth_getTransactionByHash for {len(creation_txs)} real exploit creation transactions...")
+    tx_calls = [("eth_getTransactionByHash", [txh]) for txh, _, _, _ in creation_txs]
+    tx_objs = batch_rpc(client, rpc_url, tx_calls)
+
+    # Fetch creator balances and tx counts
+    creators = list({c for _, _, c, _ in creation_txs if len(c) == 42})
+    creator_bal_calls = [("eth_getBalance", [c, "latest"]) for c in creators]
+    creator_cnt_calls = [("eth_getTransactionCount", [c, "latest"]) for c in creators]
+    creator_bals = batch_rpc(client, rpc_url, creator_bal_calls)
+    creator_cnts = batch_rpc(client, rpc_url, creator_cnt_calls)
+    creator_state = {
+        c: (parse_hex_int(b) / 1e18 * eth_price, parse_hex_int(n))
+        for c, b, n in zip(creators, creator_bals, creator_cnts)
+    }
+
+    dataset_rows: List[dict] = []
+
+    for (txh, c_addr, creator, tag), tx_obj in zip(creation_txs, tx_objs):
+        if not isinstance(tx_obj, dict):
+            continue
+        val_eth = parse_hex_int(tx_obj.get("value")) / 1e18
+        val_usd = val_eth * eth_price
+        inp = tx_obj.get("input") or "0x"
+        calldata_bytes = max(0, (len(inp) - 2) // 2)
+        gas_price_gwei = parse_hex_int(tx_obj.get("gasPrice") or tx_obj.get("maxFeePerGas")) / 1e9
+        nonce = parse_hex_int(tx_obj.get("nonce"))
+        c_bal_usd, c_tx_cnt = creator_state.get(creator, (val_usd * 1.1, nonce + 1))
+        brisk = addr_to_bytecode_risk.get(c_addr, 0.35)
+
+        # Use uniform priority fee curve across all transactions
+        prio_pct = compute_uniform_priority_percentile(tx_obj)
+        ctx = FeatureInputContext(
+            tx_value_usd=val_usd,
+            sender_pre_balance_usd=max(c_bal_usd, val_usd + 50.0, 50.0),
+            priority_fee_percentile=prio_pct,
+            wallet_tx_count=max(1, nonce),
+            young_contract_touch=True,
+            unverified_contract_touch=True,
+            unlimited_approval=False,
+            taint_score=0.0,
+            peel_or_sybil_flag=(nonce <= 5),
+            graph_edge_count=1,
+            calldata_bytes=calldata_bytes,
+            is_contract_interaction=True,
+            bytecode_risk_score=brisk,
+        )
+        vec = extract_feature_vector(ctx)
+        dataset_rows.append({
+            "source": "forta_exploit_deploy",
+            "ref": txh,
+            "tag": tag,
+            "is_attack": 1,
+            **{name: round(float(val), 6) for name, val in zip(FEATURE_NAMES, vec)},
+        })
+
+    # Fetch real Alchemy Asset Transfers for phishing / ScamSniffer drainers
+    drainer_sample = phish_eoas[:60] + phish_eoas[-60:]
+    print(f"    Fetching real on-chain transfers via alchemy_getAssetTransfers for {len(drainer_sample)} drainer/phish addresses...")
+    drainer_addrs = [a for a, _ in drainer_sample]
+    # Batch getTransactionCount & getBalance
+    d_cnts = batch_rpc(client, rpc_url, [("eth_getTransactionCount", [a, "latest"]) for a in drainer_addrs])
+    d_bals = batch_rpc(client, rpc_url, [("eth_getBalance", [a, "latest"]) for a in drainer_addrs])
+    drainer_meta = {
+        a: (parse_hex_int(b) / 1e18 * eth_price, parse_hex_int(n))
+        for a, b, n in zip(drainer_addrs, d_bals, d_cnts)
+    }
+
+    phish_tx_hashes: List[Tuple[str, str, float]] = []  # (tx_hash, tag, val_usd)
+    for addr, tag_str in drainer_sample[:80]:
+        for direction in ("toAddress", "fromAddress"):
+            res = single_rpc(
+                client,
+                rpc_url,
+                "alchemy_getAssetTransfers",
+                [{
+                    "fromBlock": "0x0",
+                    "toBlock": "latest",
+                    direction: addr,
+                    "category": ["external", "erc20"],
+                    "maxCount": "0x5",
+                    "order": "desc",
+                }],
+            )
+            if isinstance(res, dict) and isinstance(res.get("transfers"), list):
+                for tr in res["transfers"][:3]:
+                    txh = tr.get("hash")
+                    if txh and len(phish_tx_hashes) < 400:
+                        asset = (tr.get("asset") or "ETH").upper()
+                        v = float(tr.get("value") or 0.0)
+                        v_usd = v * eth_price if asset in ("ETH", "WETH") else (v if asset in ("USDC", "USDT", "DAI") else 0.0)
+                        phish_tx_hashes.append((txh, tag_str, v_usd))
+
+    # Deduplicate phish hashes & fetch actual tx payloads
+    unique_phish_txs: Dict[str, Tuple[str, float]] = {}
+    for txh, tag, v_usd in phish_tx_hashes:
+        unique_phish_txs.setdefault(txh, (tag, v_usd))
+    phish_tx_list = [(txh, tag, v_usd) for txh, (tag, v_usd) in unique_phish_txs.items()]
+    print(f"    Batch fetching {len(phish_tx_list)} real drainer/phishing transactions from chain...")
+    phish_tx_objs = batch_rpc(client, rpc_url, [("eth_getTransactionByHash", [txh]) for txh, _, _ in phish_tx_list])
+
+    # Collect unique senders and recipients of phish txs for real nonces/balances/code
+    p_addrs: Set[str] = set()
+    for tx_obj in phish_tx_objs:
+        if isinstance(tx_obj, dict):
+            if tx_obj.get("from"):
+                p_addrs.add(tx_obj["from"].lower())
+            if tx_obj.get("to"):
+                p_addrs.add(tx_obj["to"].lower())
+    p_addr_list = list(p_addrs)
+    p_codes = batch_rpc(client, rpc_url, [("eth_getCode", [a, "latest"]) for a in p_addr_list])
+    p_bals = batch_rpc(client, rpc_url, [("eth_getBalance", [a, "latest"]) for a in p_addr_list])
+    p_cnts = batch_rpc(client, rpc_url, [("eth_getTransactionCount", [a, "latest"]) for a in p_addr_list])
+    p_state = {
+        a: (isinstance(c, str) and len(c) > 4, c if isinstance(c, str) else "0x", parse_hex_int(b) / 1e18 * eth_price, parse_hex_int(n))
+        for a, c, b, n in zip(p_addr_list, p_codes, p_bals, p_cnts)
+    }
+
+    for (txh, tag, est_usd), tx_obj in zip(phish_tx_list, phish_tx_objs):
+        if not isinstance(tx_obj, dict):
+            continue
+        frm = (tx_obj.get("from") or "").lower()
+        to = (tx_obj.get("to") or "").lower()
+        inp = tx_obj.get("input") or "0x"
+        val_eth = parse_hex_int(tx_obj.get("value")) / 1e18
+        val_usd = max(est_usd, val_eth * eth_price)
+        nonce = parse_hex_int(tx_obj.get("nonce"))
+        calldata_bytes = max(0, (len(inp) - 2) // 2)
+        unlim_app = check_calldata_unlimited_approval(inp)
+
+        _, _, f_bal_usd, f_cnt = p_state.get(frm, (False, "0x", val_usd * 1.1, nonce + 1))
+        to_is_contract, to_code, _, to_cnt = p_state.get(to, (False, "0x", 0.0, 0))
+        to_in_verified = to in VERIFIED_BENIGN_PROTOCOLS
+        brisk = score_bytecode_structural(to_code)[0] if to_is_contract and not to_in_verified else 0.0
+
+        is_sweep = (f_bal_usd > 0 and val_usd / max(1.0, f_bal_usd) >= 0.7) or (nonce <= 3 and val_usd > 500)
+        prio_pct = compute_uniform_priority_percentile(tx_obj)
+
+        ctx = FeatureInputContext(
+            tx_value_usd=val_usd,
+            sender_pre_balance_usd=max(f_bal_usd, val_usd + 10.0, 50.0),
+            priority_fee_percentile=prio_pct,
+            wallet_tx_count=max(1, min(f_cnt, nonce + 1) if nonce > 0 else f_cnt),
+            young_contract_touch=(to_is_contract and not to_in_verified and to_cnt <= 20),
+            unverified_contract_touch=(to_is_contract and not to_in_verified),
+            unlimited_approval=unlim_app,
+            taint_score=0.0,
+            peel_or_sybil_flag=is_sweep,
+            graph_edge_count=5,
+            calldata_bytes=calldata_bytes,
+            is_contract_interaction=to_is_contract,
+            bytecode_risk_score=brisk,
+        )
+        vec = extract_feature_vector(ctx)
+        dataset_rows.append({
+            "source": "scamsniffer_forta_phish",
+            "ref": txh,
+            "tag": tag,
+            "is_attack": 1,
+            **{name: round(float(val), 6) for name, val in zip(FEATURE_NAMES, vec)},
+        })
+
+    return dataset_rows
+
+
