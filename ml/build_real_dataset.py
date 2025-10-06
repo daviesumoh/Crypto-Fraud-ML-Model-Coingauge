@@ -583,3 +583,153 @@ def _extract_phase1_attacks(
     return dataset_rows
 
 
+def _extract_phase2_benign(
+    client: httpx.Client,
+    rpc_url: str,
+    eth_price: float,
+    registry: Dict[str, Tuple[str, str, str]],
+) -> List[dict]:
+    print("\n[*] Phase 2: Fetching latest 10 live Ethereum Mainnet blocks for real benign baseline...")
+    latest_hex = single_rpc(client, rpc_url, "eth_blockNumber", [])
+    latest_num = parse_hex_int(latest_hex)
+    if latest_num == 0:
+        raise RuntimeError("Failed to retrieve eth_blockNumber for Phase 2")
+    blocks = []
+    for i in range(10):
+        blk = single_rpc(client, rpc_url, "eth_getBlockByNumber", [hex(latest_num - i), True])
+        if isinstance(blk, dict):
+            blocks.append(blk)
+        time.sleep(0.2)
+
+    dataset_rows: List[dict] = []
+
+    import bisect
+
+    benign_txs: List[dict] = []
+    b_addrs: Set[str] = set()
+    for blk in blocks:
+        if not isinstance(blk, dict) or not isinstance(blk.get("transactions"), list):
+            continue
+        blk_txs = blk["transactions"]
+        if len(blk_txs) > 1:
+            sorted_fees = sorted(
+                max(
+                    parse_hex_int(t.get("maxPriorityFeePerGas") or t.get("gasPrice")),
+                    parse_hex_int(t.get("maxFeePerGas") or t.get("gasPrice")),
+                )
+                for t in blk_txs
+            )
+            n_denom = float(len(sorted_fees) - 1)
+            for t in blk_txs:
+                fee = max(
+                    parse_hex_int(t.get("maxPriorityFeePerGas") or t.get("gasPrice")),
+                    parse_hex_int(t.get("maxFeePerGas") or t.get("gasPrice")),
+                )
+                rank = float(bisect.bisect_left(sorted_fees, fee))
+                t["_block_prio_pct"] = max(1.0, min(99.9, (rank / n_denom) * 100.0))
+
+        for tx_obj in blk_txs:
+            frm = (tx_obj.get("from") or "").lower()
+            to = (tx_obj.get("to") or "").lower()
+            if not frm or frm in registry or to in registry:
+                continue
+            benign_txs.append(tx_obj)
+            b_addrs.add(frm)
+            if to:
+                b_addrs.add(to)
+            if len(benign_txs) >= 1400:
+                break
+        if len(benign_txs) >= 1400:
+            break
+
+    print(f"    Collected {len(benign_txs)} live mainnet candidate txs across {len(b_addrs)} addresses. Querying on-chain state...")
+    b_addr_list = list(b_addrs)[:1200]
+    b_codes = batch_rpc(client, rpc_url, [("eth_getCode", [a, "latest"]) for a in b_addr_list])
+    b_bals = batch_rpc(client, rpc_url, [("eth_getBalance", [a, "latest"]) for a in b_addr_list])
+    b_cnts = batch_rpc(client, rpc_url, [("eth_getTransactionCount", [a, "latest"]) for a in b_addr_list])
+    b_state = {
+        a: (isinstance(c, str) and len(c) > 4, c if isinstance(c, str) else "0x", parse_hex_int(b) / 1e18 * eth_price, parse_hex_int(n))
+        for a, c, b, n in zip(b_addr_list, b_codes, b_bals, b_cnts)
+    }
+
+    benign_count = 0
+    for tx_obj in benign_txs:
+        frm = (tx_obj.get("from") or "").lower()
+        to = (tx_obj.get("to") or "").lower()
+        if frm not in b_state:
+            continue
+        inp = tx_obj.get("input") or "0x"
+        val_eth = parse_hex_int(tx_obj.get("value")) / 1e18
+        val_usd = val_eth * eth_price
+        nonce = parse_hex_int(tx_obj.get("nonce"))
+        calldata_bytes = max(0, (len(inp) - 2) // 2)
+        unlim_app = check_calldata_unlimited_approval(inp)
+
+        _, _, f_bal_usd, f_cnt = b_state[frm]
+        is_deploy = (not to) and calldata_bytes > 10
+        to_is_contract, to_code, _, to_cnt = b_state.get(to, (is_deploy, "0x", 0.0, 0))
+        to_in_verified = to in VERIFIED_BENIGN_PROTOCOLS
+        brisk = score_bytecode_structural(to_code)[0] if to_is_contract and not to_in_verified else 0.0
+
+        est_pre_bal = max(f_bal_usd, val_usd * 4.0, 500.0)
+        is_sweep = (f_bal_usd > 0 and val_usd / max(1.0, est_pre_bal) >= 0.7) or (nonce <= 3 and val_usd > 500)
+        prio_pct = compute_uniform_priority_percentile(tx_obj)
+
+        ctx = FeatureInputContext(
+            tx_value_usd=val_usd,
+            sender_pre_balance_usd=est_pre_bal,
+            priority_fee_percentile=prio_pct,
+            wallet_tx_count=max(1, f_cnt, nonce + 1),
+            young_contract_touch=(to_is_contract and not to_in_verified and to_cnt <= 20),
+            unverified_contract_touch=(to_is_contract and not to_in_verified),
+            unlimited_approval=unlim_app,
+            taint_score=0.0,
+            peel_or_sybil_flag=is_sweep,
+            graph_edge_count=2,
+            calldata_bytes=calldata_bytes,
+            is_contract_interaction=to_is_contract,
+            bytecode_risk_score=brisk,
+        )
+        vec = extract_feature_vector(ctx)
+        dataset_rows.append({
+            "source": "ethereum_mainnet_live",
+            "ref": tx_obj.get("hash", "0x"),
+            "tag": VERIFIED_BENIGN_PROTOCOLS.get(to, "Mainnet_Benign_Tx"),
+            "is_attack": 0,
+            **{name: round(float(val), 6) for name, val in zip(FEATURE_NAMES, vec)},
+        })
+        benign_count += 1
+
+    # Add real established mainnet wallet inspection snapshots (for /v1/wallet/inspect baselines)
+    for addr, (is_c, _, bal_usd, cnt) in list(b_state.items()):
+        if not is_c and cnt >= 25 and bal_usd >= 10.0:
+            ctx = FeatureInputContext(
+                tx_value_usd=0.0,
+                sender_pre_balance_usd=max(100.0, bal_usd),
+                priority_fee_percentile=45.0,
+                wallet_tx_count=cnt,
+                young_contract_touch=False,
+                unverified_contract_touch=False,
+                unlimited_approval=False,
+                taint_score=0.0,
+                peel_or_sybil_flag=False,
+                graph_edge_count=0,
+                calldata_bytes=0,
+                is_contract_interaction=False,
+                bytecode_risk_score=0.0,
+            )
+            vec = extract_feature_vector(ctx)
+            dataset_rows.append({
+                "source": "ethereum_mainnet_wallet_baseline",
+                "ref": addr,
+                "tag": "Established_Mainnet_EOA",
+                "is_attack": 0,
+                **{name: round(float(val), 6) for name, val in zip(FEATURE_NAMES, vec)},
+            })
+            benign_count += 1
+
+    return dataset_rows
+
+
+if __name__ == "__main__":
+    main()
