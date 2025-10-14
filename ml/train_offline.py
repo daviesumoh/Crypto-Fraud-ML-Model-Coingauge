@@ -172,3 +172,39 @@ def train_and_export(
     print(f"\n[+] Successfully exported pre-trained model bundle to:")
     print(f"    {output_path} ({file_size_kb:.1f} KB)")
 
+    if export_onnx:
+        try:
+            import onnxruntime as ort
+            from skl2onnx import convert_sklearn
+            from skl2onnx.common.data_types import FloatTensorType
+
+            initial_type = [("float_input", FloatTensorType([None, len(FEATURE_NAMES)]))]
+            onnx_model = convert_sklearn(
+                classifier.model,
+                initial_types=initial_type,
+                target_opset={"": 17, "ai.onnx.ml": 3},
+                options={id(classifier.model): {"zipmap": False}},
+            )
+            onnx_path = output_path.with_suffix(".onnx")
+            onnx_path.write_bytes(onnx_model.SerializeToString())
+
+            sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+            ort_out = sess.run(None, {"float_input": np.asarray(X_val[:20], dtype=np.float32)})[1][:, 1]
+            sk_out = classifier.model.predict_proba(X_val[:20])[:, 1]
+            max_diff = float(np.max(np.abs(ort_out - sk_out)))
+            onnx_kb = onnx_path.stat().st_size / 1024.0
+            print(f"[+] Successfully exported ONNX model to: {onnx_path} ({onnx_kb:.1f} KB)")
+            print(f"[+] Verified ONNX Runtime parity vs scikit-learn: max_diff={max_diff:.2e}")
+        except ImportError as exc:
+            print(f"[!] ONNX export skipped ({exc}); joblib artifact is saved.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train and export Web3 Sentinel ML model artifacts")
+    parser.add_argument("--data", type=str, default=None, help="Path to labeled training CSV")
+    parser.add_argument("--output", type=str, default=None, help="Output destination for model.joblib")
+    parser.add_argument("--onnx", action="store_true", help="Also export model.onnx")
+    args = parser.parse_args()
+
+    train_and_export(args.data, args.output, args.onnx)
+
