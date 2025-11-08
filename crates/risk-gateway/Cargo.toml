@@ -1,0 +1,25 @@
+[package]
+name = "risk-gateway"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+common-types = { path = "../common-types" }
+evm-simulator = { path = "../evm-simulator" }
+heuristics-engine = { path = "../heuristics-engine" }
+chain-indexer = { path = "../chain-indexer" }
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio-stream.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
