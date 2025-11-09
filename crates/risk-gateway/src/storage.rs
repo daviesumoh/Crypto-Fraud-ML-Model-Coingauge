@@ -110,3 +110,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+fn write_jsonl_atomic<T: Serialize>(path: &Path, items: &[T]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let seq = TMP_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = path.with_extension(format!("jsonl.tmp.{}.{}", std::process::id(), seq));
+    {
+        let mut file = File::create(&tmp_path)?;
+        for item in items {
+            let line = serde_json::to_string(item)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            writeln!(file, "{line}")?;
+        }
+        file.sync_all()?;
+    }
+    fs::rename(tmp_path, path)
+}
