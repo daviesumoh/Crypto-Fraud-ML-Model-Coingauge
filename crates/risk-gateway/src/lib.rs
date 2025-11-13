@@ -317,3 +317,73 @@ impl AppState {
     }
 }
 
+pub fn mask_endpoint(url: &str) -> String {
+    if let Some((base, key)) = url.rsplit_once("/v2/") {
+        if key.len() > 8 {
+            return format!("{}/v2/{}...{}", base, &key[..4], &key[key.len() - 4..]);
+        }
+    }
+    if let Some((base, key)) = url.rsplit_once('/') {
+        if key.len() > 16 {
+            return format!("{}/{}...{}", base, &key[..4], &key[key.len() - 4..]);
+        }
+    }
+    url.to_string()
+}
+
+pub fn load_dotenv() {
+    let mut candidates = vec![
+        std::path::PathBuf::from("env/.env"),
+        std::path::PathBuf::from(".env"),
+        std::path::PathBuf::from("../env/.env"),
+        std::path::PathBuf::from("../.env"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(std::path::PathBuf::from(home).join(".env"));
+    }
+    for path in candidates {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    let key = k.trim();
+                    let val = v.trim().trim_matches('"').trim_matches('\'');
+                    if std::env::var(key).is_err() && !val.is_empty() {
+                        std::env::set_var(key, val);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MlSidecarRequest<'a> {
+    subject_address: &'a str,
+    chain_id: u64,
+    tx_value_usd: f64,
+    sender_pre_balance_usd: f64,
+    priority_fee_percentile: f64,
+    wallet_tx_count: u64,
+    young_contract_touch: bool,
+    unverified_contract_touch: bool,
+    unlimited_approval: bool,
+    taint_score: f64,
+    peel_or_sybil_flag: bool,
+    graph_edge_count: usize,
+    calldata_bytes: usize,
+    is_contract_interaction: bool,
+    triggered_rule_ids: Vec<String>,
+    untrusted_metadata_note: Option<&'a str>,
+    target_bytecode_hex: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MlSidecarResponse {
+    predictions: ModelPredictionBundle,
+    forensic_brief: ForensicBrief,
+}
+
