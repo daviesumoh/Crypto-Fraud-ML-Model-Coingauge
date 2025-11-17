@@ -387,3 +387,57 @@ struct MlSidecarResponse {
     forensic_brief: ForensicBrief,
 }
 
+pub fn build_cors_layer() -> CorsLayer {
+    let raw = std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| {
+        "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
+            .to_string()
+    });
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| HeaderValue::from_str(s).ok())
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE])
+}
+
+pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/v1/evaluate/transaction", post(evaluate_transaction))
+        .route("/v1/evaluate/wallet", post(evaluate_wallet))
+        .route("/v1/wallet/inspect", get(inspect_wallet))
+        .route("/v1/audit-log", get(get_audit_log))
+        .route(
+            "/v1/feedback/disputes",
+            get(list_disputes).post(submit_dispute),
+        )
+        .route("/v1/stream/status", get(get_stream_status))
+        .route("/v1/stream/latest", get(get_latest_stream))
+        .route("/v1/stream/alerts", get(get_stream_alerts))
+        .route(
+            "/v1/stream/alerts/:evaluation_id",
+            patch(update_alert_status),
+        )
+        .route("/v1/stream/events", get(stream_events))
+        .layer(build_cors_layer())
+        .with_state(state)
+}
+
+async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let audit_len = state.audit_log.read().await.len();
+    let alerts_len = state.live_stream.persistent_alerts.read().await.len();
+    let eth_price = *state.eth_price_usd.read().await;
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "crypto-risk-analyzer-gateway",
+        "eth_price_usd": eth_price,
+        "evaluations_served": audit_len,
+        "alerts_stored": alerts_len,
+    }))
+}
+
