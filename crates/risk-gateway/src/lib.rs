@@ -441,3 +441,146 @@ async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
+async fn evaluate_transaction(
+    State(state): State<AppState>,
+    Json(req): Json<EvaluateTransactionRequest>,
+) -> Result<Json<CompositeRiskReport>, (StatusCode, String)> {
+    let start = Instant::now();
+    let _sender_clean = common_types::validate_and_normalize_address(&req.transaction.sender)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid sender address: {e}")))?;
+    if let Some(rcpt) = &req.transaction.recipient {
+        let _ = common_types::validate_and_normalize_address(rcpt)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid recipient address: {e}")))?;
+    }
+
+    let mut fetched_bytecode: Option<String> = None;
+    let sim = match req.mock_simulation_override.clone() {
+        Some(override_sim) => override_sim,
+        None => {
+            let mut sim_engine = state.simulator.clone();
+            let configs = get_chain_configs();
+            if let Some(cfg) = configs.iter().find(|c| c.chain_id == req.transaction.chain_id) {
+                let provider = ManagedJsonRpcProvider::new(&cfg.rpc_url);
+                if let Some(rcpt) = &req.transaction.recipient {
+                    if let Some((code, bal)) = state
+                        .cached_target_code(req.transaction.chain_id, &provider, rcpt)
+                        .await
+                    {
+                        if code.len() > 2 {
+                            fetched_bytecode = Some(code.chars().take(24_576).collect());
+                            sim_engine.seed_account(
+                                rcpt,
+                                evm_simulator::SeededAccount {
+                                    balance_wei: bal,
+                                    nonce: 1,
+                                    bytecode_hex: Some(code),
+                                    storage_slots: std::collections::HashMap::new(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            sim_engine
+                .simulate_transaction(&req.transaction)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+        }
+    };
+
+    let mut lookup_addrs = vec![req.transaction.sender.as_str()];
+    if let Some(r) = &req.transaction.recipient {
+        lookup_addrs.push(r.as_str());
+    }
+    let combined_labels = state.labels_for_addresses(&lookup_addrs, &req.entity_labels);
+
+    let mut combined_contracts = (*state.verified_contracts).clone();
+    combined_contracts.extend(req.contract_artifacts.clone());
+
+    let (findings, taint) = state.heuristics.evaluate_all(&HeuristicEvaluationContext {
+        subject_address: &req.transaction.sender,
+        current_timestamp_sec: req.transaction.timestamp_sec,
+        transaction: Some(&req.transaction),
+        simulation: Some(&sim),
+        wallet_history: &req.wallet_history,
+        graph_edges: &req.recent_graph_edges,
+        contracts: &combined_contracts,
+        entity_labels: &combined_labels,
+    });
+
+    let young_touch = req.contract_artifacts.iter().any(|c| c.age_hours < 72.0);
+    let unverified_touch = req.contract_artifacts.iter().any(|c| !c.is_verified);
+    let unlimited_app = sim.permission_mutations.iter().any(|p| p.is_unlimited);
+    let calldata_bytes = req
+        .transaction
+        .calldata_hex
+        .trim_start_matches("0x")
+        .len()
+        / 2;
+
+    let (ml_preds, brief) = query_ml_or_fallback(
+        &state,
+        MlSidecarRequest {
+            subject_address: &req.transaction.sender,
+            chain_id: req.transaction.chain_id,
+            tx_value_usd: req.transaction.value_usd,
+            sender_pre_balance_usd: req.transaction.sender_pre_balance_usd,
+            priority_fee_percentile: req.transaction.block_priority_fee_percentile,
+            wallet_tx_count: req.wallet_history.total_tx_count.max(req.transaction.nonce),
+            young_contract_touch: young_touch,
+            unverified_contract_touch: unverified_touch,
+            unlimited_approval: unlimited_app,
+            taint_score: taint.max_taint_score,
+            peel_or_sybil_flag: findings
+                .iter()
+                .any(|f| f.rule_id == "H-GRF-01" || f.rule_id == "H-GRF-02"),
+            graph_edge_count: req.recent_graph_edges.len(),
+            calldata_bytes,
+            is_contract_interaction: calldata_bytes > 0,
+            triggered_rule_ids: findings.iter().map(|f| f.rule_id.clone()).collect(),
+            untrusted_metadata_note: req.untrusted_metadata_note.as_deref(),
+            target_bytecode_hex: fetched_bytecode.as_deref(),
+        },
+        &findings,
+        &taint,
+    )
+    .await;
+
+    let (selector, decoded_fn) = decode_method_selector(&req.transaction.calldata_hex);
+    let total_latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let mut report = state.scorer.score(
+        "PRE_SIGN_TX",
+        req.transaction.chain_id,
+        &req.transaction.sender,
+        req.transaction.recipient.clone(),
+        req.wallet_history.total_tx_count.max(req.transaction.nonce),
+        findings,
+        &taint,
+        Some(sim),
+        ml_preds,
+        Some(brief),
+        total_latency_ms,
+    );
+    report.block_number = Some(req.transaction.block_number);
+    report.tx_hash = Some(req.transaction.tx_hash.clone());
+    report.method_selector = Some(selector);
+    report.decoded_function = Some(decoded_fn);
+    report.tx_value_native = Some(req.transaction.value_wei as f64 / 1e18);
+    report.tx_value_usd = Some(req.transaction.value_usd);
+    report.gas_price_gwei = Some(req.transaction.max_fee_per_gas_wei as f64 / 1e9);
+    report.subject_label = lookup_entity_name(&req.transaction.sender, &combined_labels);
+    report.counterparty_label = req
+        .transaction
+        .recipient
+        .as_deref()
+        .and_then(|r| lookup_entity_name(r, &combined_labels));
+
+    append_audit(&state, report.clone()).await;
+    Ok(Json(report))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InspectWalletQuery {
+    pub address: String,
+    pub chain_id: Option<u64>,
+}
+
