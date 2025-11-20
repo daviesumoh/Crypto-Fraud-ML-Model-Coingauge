@@ -787,3 +787,90 @@ async fn inspect_wallet(
     Ok(Json(report))
 }
 
+async fn evaluate_wallet(
+    State(state): State<AppState>,
+    Json(req): Json<EvaluateWalletRequest>,
+) -> Result<Json<CompositeRiskReport>, (StatusCode, String)> {
+    let start = Instant::now();
+    let _wallet_clean = common_types::validate_and_normalize_address(&req.wallet_address)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid wallet address: {e}")))?;
+    let latest_tx = req.recent_transactions.last();
+
+    let mut w_addrs: Vec<&str> = vec![req.wallet_address.as_str()];
+    for edge in &req.graph_edges {
+        w_addrs.push(edge.from.as_str());
+        w_addrs.push(edge.to.as_str());
+    }
+    let combined_labels = state.labels_for_addresses(&w_addrs, &req.entity_labels);
+
+    let mut combined_contracts = (*state.verified_contracts).clone();
+    combined_contracts.extend(req.contract_artifacts.clone());
+
+    let (findings, taint) = state.heuristics.evaluate_all(&HeuristicEvaluationContext {
+        subject_address: &req.wallet_address,
+        current_timestamp_sec: req.current_timestamp_sec,
+        transaction: latest_tx,
+        simulation: None,
+        wallet_history: &req.wallet_history,
+        graph_edges: &req.graph_edges,
+        contracts: &combined_contracts,
+        entity_labels: &combined_labels,
+    });
+
+    let total_vol: f64 = req.recent_transactions.iter().map(|t| t.value_usd).sum();
+    let max_prio = req
+        .recent_transactions
+        .iter()
+        .map(|t| t.block_priority_fee_percentile)
+        .fold(45.0, f64::max);
+
+    let (ml_preds, brief) = query_ml_or_fallback(
+        &state,
+        MlSidecarRequest {
+            subject_address: &req.wallet_address,
+            chain_id: req.chain_id,
+            tx_value_usd: total_vol,
+            sender_pre_balance_usd: latest_tx
+                .map(|t| t.sender_pre_balance_usd)
+                .unwrap_or(10_000.0),
+            priority_fee_percentile: max_prio,
+            wallet_tx_count: req.wallet_history.total_tx_count,
+            young_contract_touch: req.contract_artifacts.iter().any(|c| c.age_hours < 72.0),
+            unverified_contract_touch: req.contract_artifacts.iter().any(|c| !c.is_verified),
+            unlimited_approval: false,
+            taint_score: taint.max_taint_score,
+            peel_or_sybil_flag: findings
+                .iter()
+                .any(|f| f.rule_id == "H-GRF-01" || f.rule_id == "H-GRF-02"),
+            graph_edge_count: req.graph_edges.len(),
+            calldata_bytes: 0,
+            is_contract_interaction: req.target_bytecode_hex.is_some(),
+            triggered_rule_ids: findings.iter().map(|f| f.rule_id.clone()).collect(),
+            untrusted_metadata_note: None,
+            target_bytecode_hex: req.target_bytecode_hex.as_deref(),
+        },
+        &findings,
+        &taint,
+    )
+    .await;
+
+    let total_latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let mut report = state.scorer.score(
+        "POST_TX_KYT",
+        req.chain_id,
+        &req.wallet_address,
+        None,
+        req.wallet_history.total_tx_count,
+        findings,
+        &taint,
+        None,
+        ml_preds,
+        Some(brief),
+        total_latency_ms,
+    );
+    report.subject_label = lookup_entity_name(&req.wallet_address, &combined_labels);
+
+    append_audit(&state, report.clone()).await;
+    Ok(Json(report))
+}
+
