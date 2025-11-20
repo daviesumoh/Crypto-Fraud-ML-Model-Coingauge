@@ -874,3 +874,68 @@ async fn evaluate_wallet(
     Ok(Json(report))
 }
 
+async fn get_audit_log(State(state): State<AppState>) -> Json<Vec<CompositeRiskReport>> {
+    let guard = state.audit_log.read().await;
+    Json(guard.iter().rev().take(50).cloned().collect())
+}
+
+async fn list_disputes(State(state): State<AppState>) -> Json<Vec<DisputeRecord>> {
+    let guard = state.disputes.read().await;
+    Json(guard.iter().rev().cloned().collect())
+}
+
+async fn submit_dispute(
+    State(state): State<AppState>,
+    Json(sub): Json<DisputeSubmission>,
+) -> Result<Json<DisputeRecord>, (StatusCode, String)> {
+    let address = common_types::validate_and_normalize_address(&sub.address)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid dispute address: {e}")))?;
+
+    let proposed_label = sub.proposed_label.trim().to_string();
+    if proposed_label.is_empty() || proposed_label.len() > 64 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "proposed_label must be between 1 and 64 characters".to_string(),
+        ));
+    }
+
+    let analyst_notes = sub.analyst_notes.trim().to_string();
+    if analyst_notes.is_empty() || analyst_notes.len() > 1000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "analyst_notes must be between 1 and 1000 characters".to_string(),
+        ));
+    }
+
+    let record = DisputeRecord {
+        dispute_id: Uuid::new_v4(),
+        evaluation_id: sub.evaluation_id,
+        chain_id: sub.chain_id,
+        address,
+        proposed_label,
+        analyst_notes,
+        status: "PENDING".to_string(),
+        created_at: Utc::now(),
+    };
+
+    {
+        let mut guard = state.disputes.write().await;
+        if guard.len() >= MAX_PERSISTED_DISPUTES {
+            let overflow = guard.len() + 1 - MAX_PERSISTED_DISPUTES;
+            guard.drain(0..overflow);
+        }
+        guard.push(record.clone());
+    }
+    persist_disputes(&state).await;
+    Ok(Json(record))
+}
+
+async fn persist_disputes(state: &AppState) {
+    let _guard = state.persist_lock.lock().await;
+    let snapshot: Vec<DisputeRecord> = state.disputes.read().await.clone();
+    let store = state.store.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || store.save_disputes(&snapshot)).await {
+        tracing::warn!("Failed to persist disputes task: {err}");
+    }
+}
+
