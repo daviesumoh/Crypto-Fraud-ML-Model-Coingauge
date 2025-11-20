@@ -584,3 +584,206 @@ pub struct InspectWalletQuery {
     pub chain_id: Option<u64>,
 }
 
+async fn inspect_wallet(
+    State(state): State<AppState>,
+    Query(query): Query<InspectWalletQuery>,
+) -> Result<Json<CompositeRiskReport>, (StatusCode, String)> {
+    let start = Instant::now();
+    let clean_addr = common_types::validate_and_normalize_address(&query.address)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid address: {e}")))?;
+
+    let target_chain_id = query.chain_id.unwrap_or(1);
+    let configs = get_chain_configs();
+    let rpc_config = configs
+        .iter()
+        .find(|c| c.chain_id == target_chain_id)
+        .or_else(|| configs.first())
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "No RPC configured".to_string()))?;
+
+    let provider = ManagedJsonRpcProvider::new(&rpc_config.rpc_url);
+
+    state
+        .refresh_eth_price_if_stale(&provider, target_chain_id)
+        .await;
+    let eth_price = *state.eth_price_usd.read().await;
+
+    let cache_key = format!("{}:{}", target_chain_id, clean_addr);
+    let cached_state = {
+        let cache = state.wallet_cache.read().await;
+        cache.get(&cache_key).and_then(|entry| {
+            if entry.cached_at.elapsed() < Duration::from_secs(30) {
+                Some((entry.balance_wei, entry.tx_count, entry.bytecode.clone()))
+            } else {
+                None
+            }
+        })
+    };
+
+    let (balance_wei, tx_count, bytecode) = match cached_state {
+        Some(cached) => cached,
+        None => {
+            let b = provider.get_balance(&clean_addr).await.map_err(|e| match e {
+                chain_indexer::IndexerError::RateLimited => (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Upstream RPC provider rate limit exceeded (HTTP 429)".to_string(),
+                ),
+                _ => (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to retrieve balance from RPC: {e}"),
+                ),
+            })?;
+
+            let c = provider
+                .get_transaction_count(&clean_addr)
+                .await
+                .map_err(|e| match e {
+                    chain_indexer::IndexerError::RateLimited => (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "Upstream RPC provider rate limit exceeded (HTTP 429)".to_string(),
+                    ),
+                    _ => (
+                        StatusCode::BAD_GATEWAY,
+                        format!("Failed to retrieve transaction count from RPC: {e}"),
+                    ),
+                })?;
+
+            let code = provider
+                .get_code(&clean_addr)
+                .await
+                .unwrap_or_else(|_| "0x".to_string());
+
+            {
+                let mut cache = state.wallet_cache.write().await;
+                if cache.len() >= 1000 {
+                    cache.clear();
+                }
+                cache.insert(
+                    cache_key,
+                    CachedWalletState {
+                        balance_wei: b,
+                        tx_count: c,
+                        bytecode: code.clone(),
+                        cached_at: Instant::now(),
+                    },
+                );
+            }
+            (b, c, code)
+        }
+    };
+
+    let is_contract = bytecode.trim().len() > 2;
+    let graph_edges = provider
+        .fetch_alchemy_asset_transfers(&clean_addr, eth_price)
+        .await;
+
+    let balance_eth = (balance_wei as f64) / 1e18;
+    let balance_usd = balance_eth * eth_price;
+
+    let mut contracts = (*state.verified_contracts).clone();
+    let is_known_verified = state
+        .verified_contracts
+        .iter()
+        .any(|c| common_types::normalize_address(&c.address) == clean_addr);
+
+    if is_contract && !is_known_verified {
+        contracts.push(ContractArtifact {
+            chain_id: target_chain_id,
+            address: clean_addr.clone(),
+            bytecode_hash: format!("0x{:x}", bytecode.len()),
+            deployer: "0x0000000000000000000000000000000000000000".to_string(),
+            age_hours: if tx_count > 50 { 720.0 } else { 24.0 },
+            is_eoa: false,
+            is_verified: false,
+            deployed_via_create2: false,
+            factory_has_selfdestruct_history: false,
+            is_whitelisted_proxy_target: false,
+        });
+    }
+
+    let mut inspect_addrs: Vec<&str> = vec![clean_addr.as_str()];
+    for edge in &graph_edges {
+        inspect_addrs.push(edge.from.as_str());
+        inspect_addrs.push(edge.to.as_str());
+    }
+    let inspect_labels = state.labels_for_addresses(&inspect_addrs, &[]);
+
+    let (findings, taint) = state.heuristics.evaluate_all(&HeuristicEvaluationContext {
+        subject_address: &clean_addr,
+        current_timestamp_sec: Utc::now().timestamp() as u64,
+        transaction: None,
+        simulation: None,
+        wallet_history: &common_types::WalletHistoryContext {
+            total_tx_count: tx_count,
+            frequent_counterparties: Vec::new(),
+            prior_zero_or_dust_senders: Vec::new(),
+        },
+        graph_edges: &graph_edges,
+        contracts: &contracts,
+        entity_labels: &inspect_labels,
+    });
+
+    let truncated_code: Option<String> = if is_contract {
+        Some(bytecode.chars().take(24_576).collect())
+    } else {
+        None
+    };
+
+    let (ml_preds, brief) = query_ml_or_fallback(
+        &state,
+        MlSidecarRequest {
+            subject_address: &clean_addr,
+            chain_id: target_chain_id,
+            tx_value_usd: 0.0,
+            sender_pre_balance_usd: balance_usd.max(100.0),
+            priority_fee_percentile: 45.0,
+            wallet_tx_count: tx_count.max(1),
+            young_contract_touch: is_contract && !is_known_verified && tx_count <= 5,
+            unverified_contract_touch: is_contract && !is_known_verified,
+            unlimited_approval: false,
+            taint_score: taint.max_taint_score,
+            peel_or_sybil_flag: findings
+                .iter()
+                .any(|f| f.rule_id == "H-GRF-01" || f.rule_id == "H-GRF-02"),
+            graph_edge_count: graph_edges.len(),
+            calldata_bytes: 0,
+            is_contract_interaction: is_contract,
+            triggered_rule_ids: findings.iter().map(|f| f.rule_id.clone()).collect(),
+            untrusted_metadata_note: None,
+            target_bytecode_hex: truncated_code.as_deref(),
+        },
+        &findings,
+        &taint,
+    )
+    .await;
+
+    let total_latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let mut report = state.scorer.score(
+        "WALLET_INSPECTION",
+        target_chain_id,
+        &clean_addr,
+        taint.nearest_illicit_address.clone(),
+        tx_count.max(1),
+        findings,
+        &taint,
+        None,
+        ml_preds,
+        Some(brief),
+        total_latency_ms,
+    );
+    report.tx_value_native = Some(balance_eth);
+    report.tx_value_usd = Some(balance_usd);
+    report.decoded_function = Some(if is_contract {
+        format!("Contract ({} bytes)", bytecode.len().saturating_sub(2) / 2)
+    } else {
+        format!("EOA (nonce {})", tx_count)
+    });
+    report.subject_label = state.resolve_entity_name(&clean_addr);
+    report.counterparty_label = report
+        .counterparty_address
+        .as_deref()
+        .and_then(|c| state.resolve_entity_name(c));
+
+    append_audit(&state, report.clone()).await;
+    Ok(Json(report))
+}
+
