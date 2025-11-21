@@ -939,3 +939,167 @@ async fn persist_disputes(state: &AppState) {
     }
 }
 
+async fn persist_alerts(state: &AppState) {
+    let _guard = state.persist_lock.lock().await;
+    let snapshot: Vec<AlertRecord> = state
+        .live_stream
+        .persistent_alerts
+        .read()
+        .await
+        .iter()
+        .cloned()
+        .collect();
+    let store = state.store.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || store.save_alerts(&snapshot)).await {
+        tracing::warn!("Failed to persist alerts task: {err}");
+    }
+}
+
+pub async fn record_persistent_alert(state: &AppState, report: CompositeRiskReport) {
+    if report.risk_score < 25 {
+        return;
+    }
+    let record = AlertRecord {
+        evaluation_id: report.evaluation_id,
+        triage_status: "OPEN".to_string(),
+        updated_at: Utc::now(),
+        report,
+    };
+
+    {
+        let mut guard = state.live_stream.persistent_alerts.write().await;
+        if let Some(txh) = &record.report.tx_hash {
+            if guard
+                .iter()
+                .any(|existing| existing.report.tx_hash.as_deref() == Some(txh.as_str()))
+            {
+                return;
+            }
+        }
+        if guard.len() >= MAX_PERSISTED_ALERTS {
+            guard.pop_back();
+        }
+        guard.push_front(record);
+    }
+    persist_alerts(state).await;
+}
+
+async fn append_audit(state: &AppState, report: CompositeRiskReport) {
+    let mut guard = state.audit_log.write().await;
+    if guard.len() >= 200 {
+        guard.pop_front();
+    }
+    guard.push_back(report);
+}
+
+async fn get_stream_status(State(state): State<AppState>) -> Json<StreamStatusResponse> {
+    let chains = state.live_stream.chains.read().await.clone();
+    let total_eval: usize = chains.iter().map(|c| c.txs_evaluated).sum();
+    let total_threats: usize = chains.iter().map(|c| c.threats_flagged).sum();
+    let live_connected = !chains.is_empty();
+    let eth_price_usd = *state.eth_price_usd.read().await;
+    let dispute_count = state.disputes.read().await.len();
+    let ml_telemetry = state.cached_ml_telemetry().await;
+    Json(StreamStatusResponse {
+        live_connected,
+        eth_price_usd,
+        total_evaluated: total_eval,
+        total_threats,
+        threat_intel_count: state.threat_intel_map.len(),
+        verified_contract_count: state.verified_contracts.len(),
+        dispute_count,
+        ml_telemetry,
+        chains,
+    })
+}
+
+async fn get_latest_stream(State(state): State<AppState>) -> Json<Vec<CompositeRiskReport>> {
+    let guard = state.live_stream.recent_live_reports.read().await;
+    Json(guard.iter().take(100).cloned().collect())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlertsQuery {
+    pub chain_id: Option<u64>,
+    pub tier: Option<String>,
+    pub status: Option<String>,
+}
+
+async fn get_stream_alerts(
+    State(state): State<AppState>,
+    Query(query): Query<AlertsQuery>,
+) -> Json<Vec<AlertRecord>> {
+    let guard = state.live_stream.persistent_alerts.read().await;
+    let tier_filter = query.tier.map(|t| t.trim().to_ascii_uppercase());
+    let status_filter = query.status.map(|s| s.trim().to_ascii_uppercase());
+
+    let filtered: Vec<AlertRecord> = guard
+        .iter()
+        .filter(|alert| {
+            if let Some(cid) = query.chain_id {
+                if alert.report.chain_id != cid {
+                    return false;
+                }
+            }
+            if let Some(ref tier) = tier_filter {
+                if !tier.is_empty() && tier != "ALL" {
+                    let report_tier = format!("{:?}", alert.report.risk_tier).to_ascii_uppercase();
+                    if report_tier != *tier {
+                        return false;
+                    }
+                }
+            }
+            if let Some(ref st) = status_filter {
+                if !st.is_empty() && st != "ALL" && alert.triage_status != *st {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    Json(filtered)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAlertStatusRequest {
+    pub triage_status: String,
+}
+
+async fn update_alert_status(
+    State(state): State<AppState>,
+    Path(evaluation_id): Path<Uuid>,
+    Json(req): Json<UpdateAlertStatusRequest>,
+) -> Result<Json<AlertRecord>, (StatusCode, String)> {
+    let status_norm = req.triage_status.trim().to_ascii_uppercase();
+    if !matches!(
+        status_norm.as_str(),
+        "OPEN" | "ACKNOWLEDGED" | "FALSE_POSITIVE" | "CONFIRMED"
+    ) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "triage_status must be one of OPEN, ACKNOWLEDGED, FALSE_POSITIVE, CONFIRMED"
+                .to_string(),
+        ));
+    }
+
+    let updated_record = {
+        let mut guard = state.live_stream.persistent_alerts.write().await;
+        let item = guard
+            .iter_mut()
+            .find(|a| a.evaluation_id == evaluation_id)
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("Alert {evaluation_id} not found"),
+                )
+            })?;
+        item.triage_status = status_norm;
+        item.updated_at = Utc::now();
+        item.clone()
+    };
+
+    persist_alerts(&state).await;
+    Ok(Json(updated_record))
+}
+
