@@ -1103,3 +1103,116 @@ async fn update_alert_status(
     Ok(Json(updated_record))
 }
 
+async fn stream_events(
+    State(state): State<AppState>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let rx = state.live_stream.broadcast_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
+        Ok(report) => {
+            let data = serde_json::to_string(&report).ok()?;
+            Some(Ok(Event::default().data(data)))
+        }
+        Err(_) => None,
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(Debug, Clone)]
+pub struct ChainWorkerConfig {
+    pub chain_id: u64,
+    pub chain_name: &'static str,
+    pub provider_type: String,
+    pub rpc_url: String,
+    pub poll_interval: Duration,
+}
+
+fn classify_provider(url: &str) -> String {
+    if url.contains("alchemy.com") {
+        "Alchemy".to_string()
+    } else if url.contains("quiknode.pro") || url.contains("quicknode") {
+        "QuickNode".to_string()
+    } else {
+        "Custom JSON-RPC".to_string()
+    }
+}
+
+pub fn get_chain_configs() -> Vec<ChainWorkerConfig> {
+    let env_non_empty = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let alchemy_key = env_non_empty("ALCHEMY_API_KEY");
+
+    let eth_config = if let Some(custom) = env_non_empty("ETHEREUM_RPC_URL") {
+        ChainWorkerConfig {
+            chain_id: 1,
+            chain_name: "Ethereum Mainnet",
+            provider_type: classify_provider(&custom),
+            rpc_url: custom,
+            poll_interval: Duration::from_secs(6),
+        }
+    } else if let Some(qn) = env_non_empty("QUICKNODE_ETHEREUM_URL").or_else(|| env_non_empty("QUICKNODE_URL")) {
+        ChainWorkerConfig {
+            chain_id: 1,
+            chain_name: "Ethereum Mainnet",
+            provider_type: "QuickNode".to_string(),
+            rpc_url: qn,
+            poll_interval: Duration::from_secs(6),
+        }
+    } else if let Some(key) = &alchemy_key {
+        ChainWorkerConfig {
+            chain_id: 1,
+            chain_name: "Ethereum Mainnet",
+            provider_type: "Alchemy".to_string(),
+            rpc_url: format!("https://eth-mainnet.g.alchemy.com/v2/{}", key),
+            poll_interval: Duration::from_secs(6),
+        }
+    } else {
+        ChainWorkerConfig {
+            chain_id: 1,
+            chain_name: "Ethereum Mainnet",
+            provider_type: "Public JSON-RPC".to_string(),
+            rpc_url: "https://ethereum-rpc.publicnode.com".to_string(),
+            poll_interval: Duration::from_secs(10),
+        }
+    };
+
+    let base_config = if let Some(custom) = env_non_empty("BASE_RPC_URL") {
+        ChainWorkerConfig {
+            chain_id: 8453,
+            chain_name: "Base Mainnet",
+            provider_type: classify_provider(&custom),
+            rpc_url: custom,
+            poll_interval: Duration::from_millis(2500),
+        }
+    } else if let Some(qn) = env_non_empty("QUICKNODE_BASE_URL") {
+        ChainWorkerConfig {
+            chain_id: 8453,
+            chain_name: "Base Mainnet",
+            provider_type: "QuickNode".to_string(),
+            rpc_url: qn,
+            poll_interval: Duration::from_millis(2500),
+        }
+    } else if let Some(key) = &alchemy_key {
+        ChainWorkerConfig {
+            chain_id: 8453,
+            chain_name: "Base Mainnet",
+            provider_type: "Alchemy".to_string(),
+            rpc_url: format!("https://base-mainnet.g.alchemy.com/v2/{}", key),
+            poll_interval: Duration::from_millis(2500),
+        }
+    } else {
+        ChainWorkerConfig {
+            chain_id: 8453,
+            chain_name: "Base Mainnet",
+            provider_type: "Public JSON-RPC".to_string(),
+            rpc_url: "https://mainnet.base.org".to_string(),
+            poll_interval: Duration::from_millis(2500),
+        }
+    };
+
+    vec![base_config, eth_config]
+}
+
