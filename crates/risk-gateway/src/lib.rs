@@ -1216,3 +1216,168 @@ pub fn get_chain_configs() -> Vec<ChainWorkerConfig> {
     vec![base_config, eth_config]
 }
 
+pub fn spawn_live_chain_streamers(state: AppState) {
+    let configs = get_chain_configs();
+    let init_statuses: Vec<ChainStatus> = configs
+        .iter()
+        .map(|cfg| ChainStatus {
+            chain_id: cfg.chain_id,
+            chain_name: cfg.chain_name.to_string(),
+            provider_type: cfg.provider_type.clone(),
+            endpoint_masked: mask_endpoint(&cfg.rpc_url),
+            latest_block: 0,
+            txs_evaluated: 0,
+            threats_flagged: 0,
+            last_update_ts: Utc::now().timestamp() as u64,
+        })
+        .collect();
+
+    let state_for_init = state.clone();
+    tokio::spawn(async move {
+        *state_for_init.live_stream.chains.write().await = init_statuses;
+        for cfg in configs {
+            let state_worker = state_for_init.clone();
+            tokio::spawn(async move {
+                run_chain_poller(state_worker, cfg).await;
+            });
+        }
+    });
+}
+
+async fn evaluate_single_stream_transaction(
+    state: &AppState,
+    cfg: &ChainWorkerConfig,
+    provider: &ManagedJsonRpcProvider,
+    mut tx: CanonicalTransaction,
+) -> CompositeRiskReport {
+    let start_tx = Instant::now();
+    let mut sim_engine = state.simulator.clone();
+
+    let mut fetched_bytecode: Option<String> = None;
+    let mut is_contract_target = false;
+    // On-demand bytecode and balance forking from live chain
+    if let Some(rcpt) = &tx.recipient {
+        if let Some((code, bal)) = state.cached_target_code(cfg.chain_id, provider, rcpt).await {
+            if code.len() > 2 {
+                is_contract_target = true;
+                fetched_bytecode = Some(code.chars().take(24_576).collect());
+                sim_engine.seed_account(
+                    rcpt,
+                    evm_simulator::SeededAccount {
+                        balance_wei: bal,
+                        nonce: 1,
+                        bytecode_hex: Some(code),
+                        storage_slots: std::collections::HashMap::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    let sim_opt = sim_engine.simulate_transaction(&tx).ok();
+
+    if tx.value_usd == 0.0 {
+        if let Some(sim) = &sim_opt {
+            let sim_usd: f64 = sim
+                .asset_movements
+                .iter()
+                .map(|m| m.amount_usd)
+                .fold(0.0, f64::max);
+            if sim_usd > 0.0 && sim_usd <= 500_000_000.0 {
+                tx.value_usd = sim_usd;
+                tx.sender_pre_balance_usd = (sim_usd * 4.0).max(500.0);
+            }
+        }
+    }
+
+    let unlimited_app = sim_opt
+        .as_ref()
+        .map(|s| s.permission_mutations.iter().any(|p| p.is_unlimited))
+        .unwrap_or(false);
+
+    let mut lookup_addrs = vec![tx.sender.as_str()];
+    if let Some(r) = &tx.recipient {
+        lookup_addrs.push(r.as_str());
+    }
+    let stream_labels = state.labels_for_addresses(&lookup_addrs, &[]);
+    let is_known_verified_rcpt = tx.recipient.as_deref().map(|r| {
+        let norm = common_types::normalize_address(r);
+        state.verified_contracts.iter().any(|c| common_types::normalize_address(&c.address) == norm)
+    }).unwrap_or(false);
+
+    let (findings, taint) = state.heuristics.evaluate_all(&HeuristicEvaluationContext {
+        subject_address: &tx.sender,
+        current_timestamp_sec: tx.timestamp_sec,
+        transaction: Some(&tx),
+        simulation: sim_opt.as_ref(),
+        wallet_history: &common_types::WalletHistoryContext {
+            total_tx_count: tx.nonce.max(1),
+            frequent_counterparties: Vec::new(),
+            prior_zero_or_dust_senders: Vec::new(),
+        },
+        graph_edges: &[],
+        contracts: &state.verified_contracts,
+        entity_labels: &stream_labels,
+    });
+
+    let calldata_bytes = tx.calldata_hex.trim_start_matches("0x").len() / 2;
+
+    let (ml_preds, brief) = query_ml_or_fallback(
+        state,
+        MlSidecarRequest {
+            subject_address: &tx.sender,
+            chain_id: cfg.chain_id,
+            tx_value_usd: tx.value_usd,
+            sender_pre_balance_usd: tx.sender_pre_balance_usd,
+            priority_fee_percentile: tx.block_priority_fee_percentile,
+            wallet_tx_count: tx.nonce.max(1),
+            young_contract_touch: false,
+            unverified_contract_touch: is_contract_target && !is_known_verified_rcpt,
+            unlimited_approval: unlimited_app,
+            taint_score: taint.max_taint_score,
+            peel_or_sybil_flag: findings
+                .iter()
+                .any(|f| f.rule_id == "H-GRF-01" || f.rule_id == "H-GRF-02"),
+            graph_edge_count: 0,
+            calldata_bytes,
+            is_contract_interaction: calldata_bytes > 0 || is_contract_target,
+            triggered_rule_ids: findings.iter().map(|f| f.rule_id.clone()).collect(),
+            untrusted_metadata_note: None,
+            target_bytecode_hex: fetched_bytecode.as_deref(),
+        },
+        &findings,
+        &taint,
+    )
+    .await;
+
+    let (selector, decoded_fn) = decode_method_selector(&tx.calldata_hex);
+    let total_tx_latency = start_tx.elapsed().as_secs_f64() * 1000.0;
+    let mut report = state.scorer.score(
+        "LIVE_STREAM_TX",
+        cfg.chain_id,
+        &tx.sender,
+        tx.recipient.clone(),
+        tx.nonce.max(1),
+        findings,
+        &taint,
+        sim_opt,
+        ml_preds,
+        Some(brief),
+        total_tx_latency,
+    );
+    report.block_number = Some(tx.block_number);
+    report.tx_hash = Some(tx.tx_hash.clone());
+    report.method_selector = Some(selector);
+    report.decoded_function = Some(decoded_fn);
+    report.tx_value_native = Some(tx.value_wei as f64 / 1e18);
+    report.tx_value_usd = Some(tx.value_usd);
+    report.gas_price_gwei = Some(tx.max_fee_per_gas_wei as f64 / 1e9);
+    report.subject_label = state.resolve_entity_name(&tx.sender);
+    report.counterparty_label = tx
+        .recipient
+        .as_deref()
+        .and_then(|r| state.resolve_entity_name(r));
+
+    report
+}
+
