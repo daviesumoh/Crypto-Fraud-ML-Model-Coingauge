@@ -1513,3 +1513,92 @@ async fn run_chain_poller(state: AppState, cfg: ChainWorkerConfig) {
     }
 }
 
+async fn query_ml_or_fallback(
+    state: &AppState,
+    payload: MlSidecarRequest<'_>,
+    findings: &[HeuristicFinding],
+    taint: &TaintExposureSummary,
+) -> (ModelPredictionBundle, ForensicBrief) {
+    let endpoint = format!("{}/v1/ml/infer", state.ml_service_url.trim_end_matches('/'));
+    if let Ok(resp) = state.http_client.post(&endpoint).json(&payload).send().await {
+        if resp.status().is_success() {
+            if let Ok(parsed) = resp.json::<MlSidecarResponse>().await {
+                return (parsed.predictions, parsed.forensic_brief);
+            }
+        }
+    }
+
+    let mut sup: f64 = 0.02;
+    let mut anom: f64 = 0.04;
+    let mut shap = Vec::new();
+
+    if payload.unlimited_approval && payload.unverified_contract_touch {
+        sup += 0.72;
+        shap.push(ShapAttribution {
+            feature_name: "unlimited_approval_flag".to_string(),
+            feature_value: 1.0,
+            shap_impact: 0.45,
+            direction: "risk_increasing".to_string(),
+        });
+    }
+    if payload.taint_score > 0.1 {
+        sup += 0.55 * payload.taint_score;
+        shap.push(ShapAttribution {
+            feature_name: "multi_hop_haircut_taint".to_string(),
+            feature_value: payload.taint_score,
+            shap_impact: 0.38 * payload.taint_score,
+            direction: "risk_increasing".to_string(),
+        });
+    }
+    if payload.priority_fee_percentile >= 95.0 {
+        anom += 0.48;
+        shap.push(ShapAttribution {
+            feature_name: "priority_fee_percentile_norm".to_string(),
+            feature_value: payload.priority_fee_percentile / 100.0,
+            shap_impact: 0.25,
+            direction: "risk_increasing".to_string(),
+        });
+    }
+
+    let citations: Vec<String> = findings.iter().map(|f| f.rule_id.clone()).collect();
+    let summary = if findings.is_empty() {
+        "No deterministic threat rules triggered.".to_string()
+    } else {
+        format!(
+            "Triggered {} security rule(s): {}.",
+            findings.len(),
+            citations.join(", ")
+        )
+    };
+
+    let preds = ModelPredictionBundle {
+        anomaly_score: anom.clamp(0.01, 0.99),
+        supervised_fraud_prob: sup.clamp(0.01, 0.99),
+        bytecode_risk_score: 0.0,
+        nearest_bytecode_family: None,
+        bytecode_similarity: None,
+        top_shap_features: shap,
+        inference_latency_ms: 0.5,
+    };
+
+    let brief = ForensicBrief {
+        executive_summary: summary,
+        technical_forensics: format!(
+            "Max haircut taint={:.2}%, omnibus terminations={}.",
+            taint.max_taint_score * 100.0,
+            taint.terminated_at_omnibus_sinks
+        ),
+        recommended_action: if findings.iter().any(|f| f.triggers_critical_veto) {
+            "BLOCK_AND_REVOKE".to_string()
+        } else if !findings.is_empty() {
+            "STEP_UP_WARNING".to_string()
+        } else {
+            "ALLOW_WITH_MONITORING".to_string()
+        },
+        evidence_citations: citations,
+        prompt_injection_sanitized: false,
+    };
+
+    (preds, brief)
+}
+
