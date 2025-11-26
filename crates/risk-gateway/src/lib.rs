@@ -1381,3 +1381,135 @@ async fn evaluate_single_stream_transaction(
     report
 }
 
+async fn run_chain_poller(state: AppState, cfg: ChainWorkerConfig) {
+    let provider = ManagedJsonRpcProvider::new(&cfg.rpc_url);
+    let mut last_seen_block: u64 = 0;
+    let mut chain_tracker = CanonicalChainTracker::new(cfg.chain_id, 32, 2, 12);
+
+    tracing::info!(
+        "Live poller active for {} (id={}) via {} ({})",
+        cfg.chain_name,
+        cfg.chain_id,
+        cfg.provider_type,
+        mask_endpoint(&cfg.rpc_url)
+    );
+
+    loop {
+        state
+            .refresh_eth_price_if_stale(&provider, cfg.chain_id)
+            .await;
+        let eth_price = *state.eth_price_usd.read().await;
+
+        match provider.get_latest_block_number().await {
+            Ok(latest) => {
+                if last_seen_block == 0 {
+                    last_seen_block = latest;
+                }
+
+                if latest >= last_seen_block {
+                    let fetch_block = last_seen_block;
+                    last_seen_block += 1;
+
+                    if latest > last_seen_block + 3 {
+                        last_seen_block = latest;
+                    }
+
+                    match provider
+                        .fetch_ingested_block(cfg.chain_id, fetch_block, eth_price)
+                        .await
+                    {
+                        Ok(block) => {
+                            match chain_tracker.apply_block(block.clone()) {
+                                Ok(muts) => {
+                                    let rolled_back = muts.iter().filter(|m| m.sign < 0).count();
+                                    if rolled_back > 0 {
+                                        tracing::warn!(
+                                            "Chain reorg detected on {} (id={}): rolled back {} block(s)",
+                                            cfg.chain_name,
+                                            cfg.chain_id,
+                                            rolled_back
+                                        );
+                                    }
+                                }
+                                Err(chain_indexer::IndexerError::BlockGap { .. })
+                                | Err(chain_indexer::IndexerError::DeepReorgExceededWindow(_)) => {
+                                    chain_tracker =
+                                        CanonicalChainTracker::new(cfg.chain_id, 32, 2, 12);
+                                    let _ = chain_tracker.apply_block(block.clone());
+                                }
+                                Err(e) => {
+                                    tracing::debug!("Chain tracker note on {}: {e}", cfg.chain_name);
+                                }
+                            }
+
+                            let tx_count = block.transactions.len();
+                            let mut threats_in_block = 0;
+
+                            let candidates: Vec<_> = block
+                                .transactions
+                                .into_iter()
+                                .filter(|t| t.value_usd > 0.1 || t.calldata_hex.len() >= 10)
+                                .collect();
+
+                            let semaphore = Arc::new(tokio::sync::Semaphore::new(16));
+                            let mut join_set = tokio::task::JoinSet::new();
+
+                            for tx in candidates {
+                                let sem_c = semaphore.clone();
+                                let state_c = state.clone();
+                                let cfg_c = cfg.clone();
+                                let prov_c = provider.clone();
+                                join_set.spawn(async move {
+                                    let _permit = sem_c.acquire().await.ok()?;
+                                    Some(evaluate_single_stream_transaction(&state_c, &cfg_c, &prov_c, tx).await)
+                                });
+                            }
+
+                            while let Some(res) = join_set.join_next().await {
+                                if let Ok(Some(report)) = res {
+                                    if report.risk_score >= 25 {
+                                        threats_in_block += 1;
+                                        record_persistent_alert(&state, report.clone()).await;
+                                    }
+                                    let _ = state.live_stream.broadcast_tx.send(report.clone());
+                                    let mut buffer =
+                                        state.live_stream.recent_live_reports.write().await;
+                                    if buffer.len() >= 100 {
+                                        buffer.pop_back();
+                                    }
+                                    buffer.push_front(report);
+                                }
+                            }
+
+                            {
+                                let mut chains = state.live_stream.chains.write().await;
+                                if let Some(item) =
+                                    chains.iter_mut().find(|c| c.chain_id == cfg.chain_id)
+                                {
+                                    item.latest_block = fetch_block;
+                                    item.txs_evaluated += tx_count;
+                                    item.threats_flagged += threats_in_block;
+                                    item.last_update_ts = Utc::now().timestamp() as u64;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Fetch block #{} on {} failed: {}",
+                                fetch_block,
+                                cfg.chain_name,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("RPC poll error on {}: {}", cfg.chain_name, e);
+            }
+        }
+
+        tokio::time::sleep(cfg.poll_interval).await;
+    }
+}
+
