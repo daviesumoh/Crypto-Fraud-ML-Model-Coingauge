@@ -1602,3 +1602,84 @@ async fn query_ml_or_fallback(
     (preds, brief)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use common_types::{CanonicalTransaction, FinalityStatus, RiskTier, WalletHistoryContext};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn gateway_blocks_sanctioned_counterparty_and_allows_benign_transfer() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        let app = build_router(state);
+
+        let benign_req = EvaluateTransactionRequest {
+            transaction: CanonicalTransaction {
+                chain_id: 1,
+                block_number: 21_500_000,
+                block_hash: "0x11".to_string(),
+                parent_hash: "0x10".to_string(),
+                tx_hash: "0xaa".to_string(),
+                timestamp_sec: 1_735_000_000,
+                finality_status: FinalityStatus::Pending,
+                sender: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045".to_string(),
+                recipient: Some("0x28c6c06298d514db089934071355e5743bf21d60".to_string()),
+                value_wei: 100_000_000_000_000_000,
+                value_usd: 265.0,
+                calldata_hex: "0x".to_string(),
+                gas_limit: 21_000,
+                max_fee_per_gas_wei: 15_000_000_000,
+                priority_fee_per_gas_wei: 1_000_000_000,
+                block_priority_fee_percentile: 40.0,
+                nonce: 1200,
+                blocks_since_last_inbound_funding: Some(500),
+                sender_pre_balance_usd: 50_000.0,
+            },
+            wallet_history: WalletHistoryContext {
+                total_tx_count: 1200,
+                frequent_counterparties: Vec::new(),
+                prior_zero_or_dust_senders: Vec::new(),
+            },
+            recent_graph_edges: Vec::new(),
+            contract_artifacts: Vec::new(),
+            entity_labels: Vec::new(),
+            untrusted_metadata_note: None,
+            mock_simulation_override: None,
+        };
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/evaluate/transaction")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&benign_req).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let report: CompositeRiskReport = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report.risk_tier, RiskTier::Low);
+        assert_eq!(report.subject_label.as_deref(), Some("vitalik.eth"));
+
+        let mut sanctioned_req = benign_req;
+        sanctioned_req.transaction.recipient =
+            Some("0xd90e2f925da726b50c4ed8d0fb90ad053324f31b".to_string());
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/v1/evaluate/transaction")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&sanctioned_req).unwrap()))
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        let bytes2 = to_bytes(resp2.into_body(), 1024 * 1024).await.unwrap();
+        let report2: CompositeRiskReport = serde_json::from_slice(&bytes2).unwrap();
+        assert_eq!(report2.risk_tier, RiskTier::Critical);
+        assert!(report2.risk_score >= 95);
+        assert_eq!(
+            report2.counterparty_label.as_deref(),
+            Some("Tornado Cash: Router")
+        );
+    }
+
+    #[tokio::test]
