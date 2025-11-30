@@ -1683,3 +1683,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gateway_rejects_malformed_address_in_evaluate_transaction() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        let app = build_router(state);
+
+        let mut invalid_req = EvaluateTransactionRequest {
+            transaction: CanonicalTransaction {
+                chain_id: 1,
+                block_number: 21_500_000,
+                block_hash: "0x11".to_string(),
+                parent_hash: "0x10".to_string(),
+                tx_hash: "0xaa".to_string(),
+                timestamp_sec: 1_735_000_000,
+                finality_status: FinalityStatus::Pending,
+                sender: "0xinvalid123".to_string(),
+                recipient: None,
+                value_wei: 0,
+                value_usd: 0.0,
+                calldata_hex: "0x".to_string(),
+                gas_limit: 21_000,
+                max_fee_per_gas_wei: 15_000_000_000,
+                priority_fee_per_gas_wei: 1_000_000_000,
+                block_priority_fee_percentile: 40.0,
+                nonce: 0,
+                blocks_since_last_inbound_funding: None,
+                sender_pre_balance_usd: 0.0,
+            },
+            wallet_history: WalletHistoryContext {
+                total_tx_count: 0,
+                frequent_counterparties: Vec::new(),
+                prior_zero_or_dust_senders: Vec::new(),
+            },
+            recent_graph_edges: Vec::new(),
+            contract_artifacts: Vec::new(),
+            entity_labels: Vec::new(),
+            untrusted_metadata_note: None,
+            mock_simulation_override: None,
+        };
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/evaluate/transaction")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&invalid_req).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Test invalid recipient
+        invalid_req.transaction.sender = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045".to_string();
+        invalid_req.transaction.recipient = Some("0xshort".to_string());
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/v1/evaluate/transaction")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&invalid_req).unwrap()))
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn gateway_rejects_malformed_address_in_inspect_wallet() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        let app = build_router(state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/wallet/inspect?address=not-an-address")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let req2 = Request::builder()
+            .method("GET")
+            .uri("/v1/wallet/inspect?address=0x123")
+            .body(Body::empty())
+            .unwrap();
+        let resp2 = app.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
