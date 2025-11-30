@@ -1766,3 +1766,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gateway_serves_inspect_wallet_from_cache() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        let valid_addr = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+
+        // Prepopulate wallet cache for chain 1
+        {
+            let mut cache = state.wallet_cache.write().await;
+            cache.insert(
+                format!("1:{}", valid_addr),
+                CachedWalletState {
+                    balance_wei: 50_000_000_000_000_000_000, // 50 ETH
+                    tx_count: 1542,
+                    bytecode: "0x".to_string(),
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+
+        let app = build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/v1/wallet/inspect?address={}&chain_id=1", valid_addr))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let report: CompositeRiskReport = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report.subject_address, valid_addr);
+        assert_eq!(report.subject_label.as_deref(), Some("vitalik.eth"));
+    }
+
+    #[tokio::test]
+    async fn gateway_detects_forta_and_scamsniffer_threat_intel() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        assert!(state.threat_intel_map.len() > 10_000);
+        // Fake_Phishing3901 from Forta Network dataset
+        let phish_addr = "0x000000000532b45f47779fce440748893b257865";
+        {
+            let mut cache = state.wallet_cache.write().await;
+            cache.insert(
+                format!("1:{}", phish_addr),
+                CachedWalletState {
+                    balance_wei: 0,
+                    tx_count: 3,
+                    bytecode: "0x".to_string(),
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+
+        let app = build_router(state);
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/v1/wallet/inspect?address={}&chain_id=1", phish_addr))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let report: CompositeRiskReport = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report.risk_tier, RiskTier::Critical);
+        assert!(report.risk_score >= 95);
+        assert_eq!(report.subject_label.as_deref(), Some("Fake_Phishing3901"));
+    }
+
+    #[tokio::test]
