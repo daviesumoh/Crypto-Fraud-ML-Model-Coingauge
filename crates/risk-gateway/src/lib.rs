@@ -1833,3 +1833,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispute_rejects_invalid_inputs_and_persists_across_reload() {
+        let dir = std::env::temp_dir().join(format!("sentinel_dispute_test_{}", Uuid::new_v4()));
+        let state = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
+        let app = build_router(state);
+
+        let bad_addr_req = Request::builder()
+            .method("POST")
+            .uri("/v1/feedback/disputes")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "evaluation_id": null,
+                    "chain_id": 1,
+                    "address": "not-valid-hex",
+                    "proposed_label": "SafeEOA",
+                    "analyst_notes": "Valid note",
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let bad_resp = app.clone().oneshot(bad_addr_req).await.unwrap();
+        assert_eq!(bad_resp.status(), StatusCode::BAD_REQUEST);
+
+        let empty_notes_req = Request::builder()
+            .method("POST")
+            .uri("/v1/feedback/disputes")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "evaluation_id": null,
+                    "chain_id": 1,
+                    "address": "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
+                    "proposed_label": "BenignProtocol",
+                    "analyst_notes": "   ",
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let empty_resp = app.clone().oneshot(empty_notes_req).await.unwrap();
+        assert_eq!(empty_resp.status(), StatusCode::BAD_REQUEST);
+
+        let valid_req = Request::builder()
+            .method("POST")
+            .uri("/v1/feedback/disputes")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "evaluation_id": null,
+                    "chain_id": 8453,
+                    "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                    "proposed_label": "SafeEOA",
+                    "analyst_notes": "Confirmed multisig signer",
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let ok_resp = app.oneshot(valid_req).await.unwrap();
+        assert_eq!(ok_resp.status(), StatusCode::OK);
+
+        // Reload fresh AppState from the same disk directory
+        let reloaded = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
+        let app2 = build_router(reloaded);
+        let list_req = Request::builder()
+            .method("GET")
+            .uri("/v1/feedback/disputes")
+            .body(Body::empty())
+            .unwrap();
+        let list_resp = app2.oneshot(list_req).await.unwrap();
+        assert_eq!(list_resp.status(), StatusCode::OK);
+        let list_bytes = to_bytes(list_resp.into_body(), 1024 * 1024).await.unwrap();
+        let records: Vec<DisputeRecord> = serde_json::from_slice(&list_bytes).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].address, "0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn persistent_alerts_survive_reload_and_triage_updates() {
+        let dir = std::env::temp_dir().join(format!("sentinel_alerts_test_{}", Uuid::new_v4()));
+        let state = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
+        let scorer = CompositeRiskScorer::default();
+        let mut threat = scorer.score(
+            "LIVE_STREAM_TX",
+            1,
+            "0x1111111111111111111111111111111111111111",
+            Some("0x098b716b8aaf21512996dc57eb0615e2383e2f96".to_string()),
+            10,
+            vec![HeuristicFinding {
+                rule_id: "H-AML-01".to_string(),
+                rule_version: "1.4.0".to_string(),
+                title: "Sanctioned Target".to_string(),
+                severity: common_types::Severity::Critical,
+                triggers_critical_veto: true,
+                description: "Direct sanctioned interaction".to_string(),
+                evidence: serde_json::json!({}),
+            }],
+            &TaintExposureSummary::default(),
+            None,
+            ModelPredictionBundle::default(),
+            None,
+            3.1,
+        );
+        threat.tx_hash = Some("0xdeadbeef01".to_string());
+        let eval_id = threat.evaluation_id;
+
+        record_persistent_alert(&state, threat).await;
+
+        // Simulate 150 LOW traffic items evicting recent_live_reports
+        {
+            let mut ring = state.live_stream.recent_live_reports.write().await;
+            for i in 0..150 {
+                let mut low = scorer.score(
+                    "LIVE_STREAM_TX",
+                    8453,
+                    "0x2222222222222222222222222222222222222222",
+                    None,
+                    10,
+                    Vec::new(),
+                    &TaintExposureSummary::default(),
+                    None,
+                    ModelPredictionBundle::default(),
+                    None,
+                    1.0,
+                );
+                low.tx_hash = Some(format!("0xlow{i:04}"));
+                if ring.len() >= 100 {
+                    ring.pop_back();
+                }
+                ring.push_front(low);
+            }
+        }
+
+        // Alert remains intact and updates triage status persistently
+        let app = build_router(state);
+        let patch_req = Request::builder()
+            .method("PATCH")
+            .uri(format!("/v1/stream/alerts/{eval_id}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"triage_status":"CONFIRMED"}"#))
+            .unwrap();
+        let patch_resp = app.oneshot(patch_req).await.unwrap();
+        assert_eq!(patch_resp.status(), StatusCode::OK);
+
+        let reloaded = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
+        let app2 = build_router(reloaded);
+        let alerts_req = Request::builder()
+            .method("GET")
+            .uri("/v1/stream/alerts?status=CONFIRMED")
+            .body(Body::empty())
+            .unwrap();
+        let alerts_resp = app2.oneshot(alerts_req).await.unwrap();
+        assert_eq!(alerts_resp.status(), StatusCode::OK);
+        let body = to_bytes(alerts_resp.into_body(), 1024 * 1024).await.unwrap();
+        let alerts: Vec<AlertRecord> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].evaluation_id, eval_id);
+        assert_eq!(alerts[0].triage_status, "CONFIRMED");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
