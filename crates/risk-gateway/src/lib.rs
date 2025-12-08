@@ -1994,3 +1994,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handles_concurrent_requests_and_blocks_configure_endpoint() {
+        let state = AppState::new_ephemeral("http://127.0.0.1:59999");
+        let app = build_router(state);
+
+        // Configure endpoint must not exist
+        let cfg_req = Request::builder()
+            .method("POST")
+            .uri("/v1/stream/configure")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"alchemy_api_key":"evil"}"#))
+            .unwrap();
+        let cfg_resp = app.clone().oneshot(cfg_req).await.unwrap();
+        assert_eq!(cfg_resp.status(), StatusCode::NOT_FOUND);
+
+        // CORS preflight checks
+        let cors_bad = Request::builder()
+            .method("OPTIONS")
+            .uri("/v1/stream/status")
+            .header("origin", "https://malicious.example")
+            .header("access-control-request-method", "GET")
+            .body(Body::empty())
+            .unwrap();
+        let cors_bad_resp = app.clone().oneshot(cors_bad).await.unwrap();
+        assert!(cors_bad_resp.headers().get("access-control-allow-origin").is_none());
+
+        let cors_ok = Request::builder()
+            .method("OPTIONS")
+            .uri("/v1/stream/status")
+            .header("origin", "http://localhost:3001")
+            .header("access-control-request-method", "GET")
+            .body(Body::empty())
+            .unwrap();
+        let cors_ok_resp = app.clone().oneshot(cors_ok).await.unwrap();
+        assert_eq!(
+            cors_ok_resp
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://localhost:3001")
+        );
+
+        // 12 concurrent evaluation & status reads
+        let mut tasks = tokio::task::JoinSet::new();
+        for i in 0..12 {
+            let app_c = app.clone();
+            tasks.spawn(async move {
+                let uri = if i % 2 == 0 {
+                    "/v1/stream/status"
+                } else {
+                    "/v1/stream/alerts"
+                };
+                let req = Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap();
+                app_c.oneshot(req).await.unwrap().status()
+            });
+        }
+        while let Some(res) = tasks.join_next().await {
+            assert_eq!(res.unwrap(), StatusCode::OK);
+        }
+    }
+}
