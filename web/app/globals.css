@@ -1,0 +1,141 @@
+:root {
+  --bg-canvas: #000000;
+  --bg-chrome: #050506;
+  --bg-surface: #1a1a1a;
+  --bg-surface-header: #242425;
+  --bg-surface-hover: #242425;
+  --bg-surface-active: #242425;
+  --bg-input: #1a1a1a;
+
+  --accent: #f2f2f2;
+  --accent-hover: #ffffff;
+  --accent-ink: #000000;
+
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.72);
+  --text-tertiary: rgba(255, 255, 255, 0.48);
+  --text-dim: rgba(255, 255, 255, 0.28);
+
+  --safe: #6ca67f;
+  --safe-tint: rgba(108, 166, 127, 0.09);
+  --warn: #c79c4c;
+  --warn-tint: rgba(199, 156, 76, 0.10);
+  --high: #d17c57;
+  --high-tint: rgba(209, 124, 87, 0.11);
+  --danger: #cc6666;
+  --danger-tint: rgba(204, 102, 102, 0.12);
+
+  --divider: #242425;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Application Shell */
+.shell-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg-canvas);
+}
+
+.topbar {
+  height: 48px;
+  min-height: 48px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--bg-surface);
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.brand-logo {
+  height: 26px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.topbar-pill strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--safe);
+  flex-shrink: 0;
+}
+
+.status-dot.paused {
+  background: var(--warn);
+}
+
+.status-dot.offline {
+  background: var(--danger);
+}
+
+.shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
