@@ -426,3 +426,221 @@ pre,
   color: var(--accent-ink);
 }
 
+/* Filter Toolbar */
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.input-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 280px;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  transition: background 0.12s ease;
+}
+
+.input-search-wrap:focus-within {
+  background: var(--bg-surface-active);
+}
+
+.input-search {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.input-search::placeholder {
+  color: var(--text-tertiary);
+}
+
+.filter-select {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-surface);
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.filter-select:hover,
+.filter-select:focus {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.filter-select.active {
+  background: var(--bg-surface-active);
+  color: var(--text-primary);
+}
+
+.segmented-control {
+  display: inline-flex;
+  background: var(--bg-input);
+  border-radius: 6px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.segment-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.segment-btn:hover {
+  color: var(--text-primary);
+}
+
+.segment-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* Master-Detail Workspace */
+.split-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.split-grid.with-drawer {
+  grid-template-columns: minmax(0, 1fr) 390px;
+}
+
+.table-card {
+  background: var(--bg-surface);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  max-height: calc(100vh - 216px);
+  overflow-y: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-surface-header);
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.data-row {
+  cursor: pointer;
+  transition: background 0.08s ease;
+}
+
+.data-row:hover {
+  background: var(--bg-surface-hover);
+}
+
+.data-row.selected {
+  background: var(--bg-surface-active);
+}
+
+.data-row:last-child td {
+  border-bottom: none;
+}
+
+/* Status Tags (Subtle desaturated risk indicators) */
+.risk-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.risk-low {
+  color: var(--safe);
+  background: var(--safe-tint);
+}
+
+.risk-medium {
+  color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.risk-high {
+  color: var(--high);
+  background: var(--high-tint);
+  font-weight: 600;
+}
+
+.risk-critical {
+  color: var(--danger);
+  background: var(--danger-tint);
+  font-weight: 600;
+}
+
+.policy-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.policy-ALLOW {
+  color: var(--safe);
+}
+
+.policy-WARN {
+  color: var(--warn);
+}
+
+.policy-HOLD {
+  color: var(--high);
+}
+
+.policy-BLOCK {
+  color: var(--danger);
+}
+
