@@ -895,3 +895,275 @@ export default function CryptoRiskConsole() {
           </div>
         </aside>
 
+        {/* Main Viewport */}
+        <main className="main-viewport">
+          {streamError && (
+            <div className="alert-banner">
+              <span>{streamError}</span>
+              <button
+                type="button"
+                className="btn-copy-xs"
+                onClick={() => refreshStatusAndLatest()}
+              >
+                Retry Connection
+              </button>
+            </div>
+          )}
+
+          {(activeTab === "stream" || activeTab === "alerts") && (
+            <div>
+              <div className="page-header">
+                <div>
+                  <h1 className="page-title">{activeTab === "alerts" ? "Alerts" : "Transactions"}</h1>
+                  <div className="page-subtitle">
+                    {activeTab === "alerts"
+                      ? `Persistent threat log · ${displayedReports.length} shown of ${alertRecords.length} stored alerts · ${openAlertsCount} open`
+                      : threatsOnly
+                      ? `${displayedReports.length} shown in live buffer · ${streamStatus ? streamStatus.total_threats.toLocaleString() : "0"} total flagged (score ≥ 25)`
+                      : `${displayedReports.length} shown in rolling buffer · ${streamStatus ? streamStatus.total_evaluated.toLocaleString() : "0"} total evaluated across chains`}
+                  </div>
+                </div>
+                <div className="page-header-actions">
+                  {activeTab === "alerts" ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => fetchAlerts()}
+                    >
+                      Refresh Alerts
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="cli-pill"
+                      onClick={() => copyToClipboard(`curl -N ${GATEWAY_URL}/v1/stream/events`)}
+                      title="Copy SSE endpoint curl command"
+                    >
+                      <span>curl -N /v1/stream/events</span>
+                      <span style={{ color: "var(--text-tertiary)" }}>
+                        {copiedText === `curl -N ${GATEWAY_URL}/v1/stream/events` ? "✓" : "Copy"}
+                      </span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      setActiveTab("inspector");
+                      setInspectorMode("address");
+                      setTimeout(() => inspectorInputRef.current?.focus(), 40);
+                    }}
+                  >
+                    + Inspect address
+                  </button>
+                </div>
+              </div>
+
+              <div className="toolbar-row">
+                <div className="input-search-wrap">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input
+                    ref={filterInputRef}
+                    className="input-search"
+                    placeholder="Filter hash, 0x address, or method..."
+                    value={tableFilter}
+                    onChange={(e) => setTableFilter(e.target.value)}
+                  />
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <select
+                    aria-label="Filter by chain"
+                    className={`filter-select ${chainFilter !== "all" ? "active" : ""}`}
+                    value={chainFilter}
+                    onChange={(e) => setChainFilter(e.target.value as "all" | "1" | "8453")}
+                  >
+                    <option value="all">All Chains</option>
+                    <option value="1">Ethereum</option>
+                    <option value="8453">Base</option>
+                  </select>
+
+                  <select
+                    aria-label="Filter by risk tier"
+                    className={`filter-select ${tierFilter !== "all" ? "active" : ""}`}
+                    value={tierFilter}
+                    onChange={(e) =>
+                      setTierFilter(e.target.value as "all" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL")
+                    }
+                  >
+                    <option value="all">All Risk</option>
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                    <option value="CRITICAL">Critical</option>
+                  </select>
+
+                  <select
+                    aria-label="Filter by transaction value"
+                    className={`filter-select ${valueFilter !== "all" ? "active" : ""}`}
+                    value={valueFilter}
+                    onChange={(e) =>
+                      setValueFilter(
+                        e.target.value as "all" | "gt0" | "gte100" | "gte1000" | "gte10000"
+                      )
+                    }
+                  >
+                    <option value="all">All Values</option>
+                    <option value="gt0">&gt; $0</option>
+                    <option value="gte100">≥ $100</option>
+                    <option value="gte1000">≥ $1,000</option>
+                    <option value="gte10000">≥ $10,000</option>
+                  </select>
+
+                  {activeTab === "alerts" && (
+                    <select
+                      aria-label="Filter by triage status"
+                      className={`filter-select ${triageFilter !== "all" ? "active" : ""}`}
+                      value={triageFilter}
+                      onChange={(e) =>
+                        setTriageFilter(
+                          e.target.value as "all" | "OPEN" | "ACKNOWLEDGED" | "CONFIRMED" | "FALSE_POSITIVE"
+                        )
+                      }
+                    >
+                      <option value="all">All Triage</option>
+                      <option value="OPEN">Open</option>
+                      <option value="ACKNOWLEDGED">Reviewed</option>
+                      <option value="CONFIRMED">Confirmed</option>
+                      <option value="FALSE_POSITIVE">False Positive</option>
+                    </select>
+                  )}
+
+                  {(chainFilter !== "all" ||
+                    tierFilter !== "all" ||
+                    valueFilter !== "all" ||
+                    (activeTab === "alerts" && triageFilter !== "all") ||
+                    tableFilter.trim() !== "") && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setChainFilter("all");
+                        setTierFilter("all");
+                        setValueFilter("all");
+                        setTriageFilter("all");
+                        setTableFilter("");
+                      }}
+                    >
+                      Reset
+                    </button>
+                  )}
+
+                  {activeTab === "stream" && (
+                    <button
+                      type="button"
+                      className={`btn-secondary ${threatsOnly ? "active" : ""}`}
+                      onClick={() => setThreatsOnly(!threatsOnly)}
+                    >
+                      Flagged only
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className={`split-grid ${selectedReport ? "with-drawer" : ""}`}>
+                <div className="table-card">
+                  <div className="table-scroll">
+                    {displayedReports.length === 0 ? (
+                      <div style={{ padding: 48, textAlign: "center", color: "var(--text-tertiary)" }}>
+                        {streamError
+                          ? "Gateway connection required to stream live blocks."
+                          : chainFilter !== "all" ||
+                            tierFilter !== "all" ||
+                            valueFilter !== "all" ||
+                            (activeTab === "alerts" && triageFilter !== "all") ||
+                            tableFilter.trim() !== ""
+                          ? "No transactions match the active filters."
+                          : activeTab === "alerts"
+                          ? "No threat alerts recorded yet."
+                          : threatsOnly
+                          ? "No flagged transactions in the current rolling buffer."
+                          : "Waiting for incoming blocks..."}
+                      </div>
+                    ) : (
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Network / Block</th>
+                            <th>Transaction / Method</th>
+                            <th>Subject → Counterparty</th>
+                            <th>Value</th>
+                            <th>Score</th>
+                            <th>Policy</th>
+                            {activeTab === "alerts" && <th>Triage</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayedReports.map((report) => {
+                            const isSelected = selectedReport?.evaluation_id === report.evaluation_id;
+                            const alertMeta = alertStatusById.get(report.evaluation_id);
+                            return (
+                              <tr
+                                key={report.evaluation_id}
+                                className={`data-row ${isSelected ? "selected" : ""}`}
+                                onClick={() => setSelectedReport(isSelected ? null : report)}
+                              >
+                                <td>
+                                  <div style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                                    {report.chain_id === 8453 ? "Base" : "Ethereum"}
+                                  </div>
+                                  <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+                                    {report.block_number ? `#${report.block_number.toLocaleString()}` : "—"}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div className="mono" style={{ color: "var(--text-primary)" }}>
+                                    {report.tx_hash ? truncateHex(report.tx_hash, 4) : truncateHex(report.subject_address, 4)}
+                                  </div>
+                                  <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+                                    {report.decoded_function || report.method_selector || "Native Transfer"}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div className="mono" style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
+                                    {report.subject_label || truncateHex(report.subject_address, 4)}
+                                    <span style={{ color: "var(--text-dim)" }}> → </span>
+                                    {report.counterparty_label ||
+                                      (report.counterparty_address
+                                        ? truncateHex(report.counterparty_address, 4)
+                                        : "Contract Deploy")}
+                                  </div>
+                                </td>
+                                <td className="mono" style={{ color: "var(--text-primary)" }}>
+                                  {report.tx_value_usd != null && report.tx_value_usd > 0
+                                    ? `$${report.tx_value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    : "$0.00"}
+                                </td>
+                                <td>
+                                  <span className={`risk-tag risk-${report.risk_tier.toLowerCase()}`}>
+                                    {report.risk_score} · {report.risk_tier}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className={`policy-text policy-${report.policy_action}`}>
+                                    {report.policy_action}
+                                  </span>
+                                </td>
+                                {activeTab === "alerts" && (
+                                  <td className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                                    {alertMeta?.triage_status || "OPEN"}
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+
