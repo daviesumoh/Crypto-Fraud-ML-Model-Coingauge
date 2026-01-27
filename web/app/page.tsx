@@ -707,3 +707,191 @@ export default function CryptoRiskConsole() {
 
   return (
     <div className="shell-root">
+      {/* Top Global Utility Bar */}
+      <header className="topbar">
+        <div className="topbar-brand">
+          <span>Crypto Risk Analyzer</span>
+        </div>
+
+        <div className="topbar-actions">
+          <div
+            className="topbar-pill"
+            title={
+              streamStatus
+                ? `Connected to ${streamStatus.chains.length} network(s) via ${primaryProvider}`
+                : "Connecting to Gateway JSON-RPC stream"
+            }
+          >
+            <span className={`status-dot ${statusDotClass}`} />
+            {streamStatus ? (
+              <>
+                <strong>{primaryProvider}</strong>
+                <span style={{ color: "var(--text-tertiary)" }}>Live</span>
+                {rpcStateSuffix && (
+                  <>
+                    <span style={{ color: "var(--text-dim)" }}>·</span>
+                    <span>{rpcStateSuffix}</span>
+                  </>
+                )}
+              </>
+            ) : (
+              <span>{rpcStateSuffix || "Connecting RPC"}</span>
+            )}
+          </div>
+
+          <div className="topbar-pill mono" title="Live Chainlink ETH/USD spot reference price">
+            <span style={{ color: "var(--text-tertiary)" }}>ETH</span>
+            <strong>
+              {streamStatus?.eth_price_usd
+                ? `USD ${streamStatus.eth_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : "—"}
+            </strong>
+          </div>
+
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ height: 28, fontSize: 12 }}
+            disabled={!streamStatus && !!streamError}
+            onClick={() => setIsPaused((p) => !p)}
+          >
+            <span>{isPaused ? "Resume" : "Pause"}</span>
+            <span className="kbd-hint">Space</span>
+          </button>
+        </div>
+      </header>
+
+      <div className="shell-body">
+        {/* Left Navigation Sidebar */}
+        <aside className="sidebar">
+          <div>
+            <button
+              type="button"
+              className="sidebar-search-trigger"
+              onClick={() => {
+                setActiveTab("inspector");
+                setInspectorMode("address");
+                setTimeout(() => inspectorInputRef.current?.focus(), 40);
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <span>Inspect address</span>
+              </span>
+              <span className="kbd-hint">⌘K</span>
+            </button>
+
+            <div className="nav-group">
+              <button
+                type="button"
+                className={`nav-btn ${activeTab === "stream" ? "active" : ""}`}
+                onClick={() => {
+                  setActiveTab("stream");
+                }}
+              >
+                <span className="nav-btn-left">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                  </svg>
+                  <span>Stream</span>
+                </span>
+                <span className="nav-badge" title="Total evaluated transactions across all chains">
+                  {streamStatus ? formatCompactCount(streamStatus.total_evaluated) : liveReports.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`nav-btn ${activeTab === "inspector" ? "active" : ""}`}
+                onClick={() => setActiveTab("inspector")}
+              >
+                <span className="nav-btn-left">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <span>Inspector</span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`nav-btn ${activeTab === "chains" ? "active" : ""}`}
+                onClick={() => setActiveTab("chains")}
+              >
+                <span className="nav-btn-left">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                    <line x1="6" y1="6" x2="6.01" y2="6" />
+                    <line x1="6" y1="18" x2="6.01" y2="18" />
+                  </svg>
+                  <span>Nodes & Models</span>
+                </span>
+              </button>
+            </div>
+
+            <div className="nav-group-label">Security</div>
+
+            <div className="nav-group">
+              <button
+                type="button"
+                className={`nav-btn ${activeTab === "alerts" ? "active" : ""}`}
+                onClick={() => {
+                  setActiveTab("alerts");
+                }}
+              >
+                <span className="nav-btn-left">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                  <span>Alerts</span>
+                </span>
+                <span className="nav-badge" title={`${openAlertsCount} open / ${alertRecords.length} stored alerts`}>
+                  {alertRecords.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`nav-btn ${activeTab === "rules" ? "active" : ""}`}
+                onClick={() => setActiveTab("rules")}
+              >
+                <span className="nav-btn-left">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                  <span>Rules</span>
+                </span>
+                <span className="nav-badge">{HEURISTIC_RULES.length}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="sidebar-footer">
+            <div className="telemetry-footer-card">
+              <div className="telemetry-row">
+                <span>SSE Stream</span>
+                <span className="mono" style={{ color: sseStatus === "connected" ? "var(--safe)" : sseStatus === "offline" ? "var(--danger)" : "var(--warn)" }}>
+                  {sseStatus}
+                </span>
+              </div>
+              <div className="telemetry-row">
+                <span>ML Inference</span>
+                <span className="mono" style={{ color: mlTelemetry?.onnx_active ? "var(--safe)" : mlTelemetry?.connected ? "var(--warn)" : "var(--danger)" }}>
+                  {mlTelemetry?.onnx_active ? "ONNX" : mlTelemetry?.connected ? "Fallback" : "Offline"}
+                </span>
+              </div>
+              <div className="telemetry-row">
+                <span>Gateway</span>
+                <span className="mono">{GATEWAY_URL.replace(/^https?:\/\//, "")}</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+
