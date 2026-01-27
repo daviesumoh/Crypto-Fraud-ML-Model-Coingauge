@@ -542,3 +542,168 @@ export default function CryptoRiskConsole() {
     return list;
   }, [activeTab, alertRecords, liveReports, chainFilter, tierFilter, valueFilter, triageFilter, threatsOnly, tableFilter]);
 
+  async function inspectAddress(addrOverride?: string, chainOverride?: number) {
+    const targetAddr = (addrOverride ?? searchAddr).trim();
+    const targetChain = chainOverride ?? searchChainId;
+    if (!targetAddr) return;
+
+    if (addrOverride !== undefined) setSearchAddr(addrOverride);
+    if (chainOverride !== undefined) setSearchChainId(chainOverride);
+    setActiveTab("inspector");
+    setInspectorMode("address");
+    setIsSearching(true);
+    setSearchError(null);
+
+    try {
+      const res = await fetch(
+        `${GATEWAY_URL}/v1/wallet/inspect?address=${encodeURIComponent(targetAddr)}&chain_id=${targetChain}`
+      );
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || `HTTP ${res.status}`);
+      }
+      const report: RiskReport = await res.json();
+      setScannedReport(report);
+    } catch (err: unknown) {
+      setSearchError(err instanceof Error ? err.message : "Failed to inspect address");
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  async function simulateTransaction(overrides?: {
+    chainId?: number;
+    from?: string;
+    to?: string;
+    valueEth?: string;
+    calldata?: string;
+  }) {
+    const chainId = overrides?.chainId ?? txChainId;
+    const from = (overrides?.from ?? txFrom).trim();
+    const to = (overrides?.to ?? txTo).trim();
+    const valueEthNum = Math.max(0, Number(overrides?.valueEth ?? txValueEth) || 0);
+    const calldata = (overrides?.calldata ?? txCalldata).trim() || "0x";
+
+    if (!from) {
+      setSimError("Sender address is required.");
+      return;
+    }
+
+    setIsSimulating(true);
+    setSimError(null);
+
+    const ethUsd = streamStatus?.eth_price_usd || 2650;
+    const valueWei = BigInt(Math.round(valueEthNum * 1e9)) * BigInt(1_000_000_000);
+    const valueUsd = Number((valueEthNum * ethUsd).toFixed(2));
+    const blockNum =
+      streamStatus?.chains.find((c) => c.chain_id === chainId)?.latest_block ||
+      (chainId === 8453 ? 25_000_000 : 21_500_000);
+
+    try {
+      const bodyStr = JSON.stringify({
+        transaction: {
+          chain_id: chainId,
+          block_number: blockNum,
+          block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+          parent_hash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+          tx_hash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+          timestamp_sec: Math.floor(Date.now() / 1000),
+          finality_status: "pending",
+          sender: from,
+          recipient: to || null,
+          value_wei: "__VALUE_WEI__",
+          value_usd: valueUsd,
+          calldata_hex: calldata.startsWith("0x") ? calldata : `0x${calldata}`,
+          gas_limit: 250_000,
+          max_fee_per_gas_wei: 20_000_000_000,
+          priority_fee_per_gas_wei: 1_000_000_000,
+          block_priority_fee_percentile: 45.0,
+          nonce: 10,
+          blocks_since_last_inbound_funding: 200,
+          sender_pre_balance_usd: Math.max(50_000, valueUsd * 2),
+        },
+      }).replace('"__VALUE_WEI__"', valueWei.toString());
+
+      const res = await fetch(`${GATEWAY_URL}/v1/evaluate/transaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: bodyStr,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || `HTTP ${res.status}`);
+      }
+      const report: RiskReport = await res.json();
+      setSimReport(report);
+    } catch (err: unknown) {
+      setSimError(err instanceof Error ? err.message : "Pre-sign simulation failed");
+    } finally {
+      setIsSimulating(false);
+    }
+  }
+
+  async function submitDispute(report: RiskReport, targetAddr: string) {
+    if (!disputeNotes.trim()) return;
+    setIsSubmittingDispute(true);
+    setDisputeFeedback(null);
+    try {
+      const res = await fetch(`${GATEWAY_URL}/v1/feedback/disputes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          evaluation_id: report.evaluation_id,
+          chain_id: report.chain_id,
+          address: targetAddr,
+          proposed_label: disputeLabel.trim() || "BenignProtocol",
+          analyst_notes: disputeNotes.trim(),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const record: DisputeRecord = await res.json();
+      setDisputes((prev) => [record, ...prev]);
+      setDisputeFeedback(`Recorded dispute ${truncateHex(record.dispute_id, 4)}`);
+      setDisputeNotes("");
+      setShowDisputeForm(false);
+      refreshStatusAndLatest();
+    } catch (err: unknown) {
+      setDisputeFeedback(err instanceof Error ? `Failed: ${err.message}` : "Failed to submit dispute");
+    } finally {
+      setIsSubmittingDispute(false);
+    }
+  }
+
+  function copyToClipboard(text: string) {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopiedText(text);
+    setTimeout(() => setCopiedText(null), 1500);
+  }
+
+  const ethChain = streamStatus?.chains.find((c) => c.chain_id === 1);
+  const baseChain = streamStatus?.chains.find((c) => c.chain_id === 8453);
+  const primaryProvider = ethChain?.provider_type || baseChain?.provider_type || "Connecting";
+  const mlTelemetry = streamStatus?.ml_telemetry;
+  const mlMetrics = mlTelemetry?.holdout_metrics;
+  const openAlertsCount = alertRecords.filter((a) => a.triage_status === "OPEN").length;
+
+  const statusDotClass =
+    sseStatus === "offline" || (!streamStatus && streamError)
+      ? "offline"
+      : isPaused || sseStatus === "reconnecting"
+      ? "paused"
+      : "";
+  const rpcStateSuffix =
+    sseStatus === "offline" || (!streamStatus && streamError)
+      ? "Offline"
+      : isPaused
+      ? "Paused"
+      : sseStatus === "reconnecting"
+      ? "Reconnecting"
+      : null;
+
+  return (
+    <div className="shell-root">
