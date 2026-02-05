@@ -1167,3 +1167,342 @@ export default function CryptoRiskConsole() {
                   </div>
                 </div>
 
+                {selectedReport && (
+                  <div className="drawer-panel">
+                    <div className="drawer-header">
+                      <div>
+                        <div className="drawer-title">
+                          {selectedReport.decoded_function || selectedReport.evaluation_mode}
+                        </div>
+                        <div className="drawer-sub">
+                          {selectedReport.tx_hash
+                            ? truncateHex(selectedReport.tx_hash, 8)
+                            : truncateHex(selectedReport.subject_address, 8)}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className={`risk-tag risk-${selectedReport.risk_tier.toLowerCase()}`}>
+                          {selectedReport.risk_score} · {selectedReport.policy_action}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-copy-xs"
+                          onClick={() => setSelectedReport(null)}
+                          aria-label="Close details"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    <table className="kv-table">
+                      <tbody>
+                        {selectedReport.block_number != null && (
+                          <tr>
+                            <td className="kv-key">Block</td>
+                            <td className="kv-val">
+                              {selectedReport.chain_id === 8453 ? "Base" : "Ethereum"} #{selectedReport.block_number.toLocaleString()}
+                            </td>
+                          </tr>
+                        )}
+                        {selectedReport.tx_hash && (
+                          <tr>
+                            <td className="kv-key">Transaction</td>
+                            <td className="kv-val">
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                <a
+                                  href={getExplorerTxUrl(selectedReport.chain_id, selectedReport.tx_hash)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="link-muted"
+                                >
+                                  {truncateHex(selectedReport.tx_hash, 6)} ↗
+                                </a>
+                                <button
+                                  type="button"
+                                  className="btn-copy-xs"
+                                  onClick={() => copyToClipboard(selectedReport.tx_hash!)}
+                                >
+                                  {copiedText === selectedReport.tx_hash ? "Copied" : "Copy"}
+                                </button>
+                              </span>
+                            </td>
+                          </tr>
+                        )}
+                        <tr>
+                          <td className="kv-key">Subject</td>
+                          <td className="kv-val">
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              {selectedReport.subject_label && (
+                                <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-sans)" }}>
+                                  {selectedReport.subject_label}
+                                </span>
+                              )}
+                              <a
+                                href={getExplorerAddressUrl(selectedReport.chain_id, selectedReport.subject_address)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="link-muted"
+                              >
+                                {truncateHex(selectedReport.subject_address, 5)} ↗
+                              </a>
+                              <button
+                                type="button"
+                                className="btn-copy-xs"
+                                onClick={() => copyToClipboard(selectedReport.subject_address)}
+                              >
+                                {copiedText === selectedReport.subject_address ? "Copied" : "Copy"}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-copy-xs"
+                                onClick={() => inspectAddress(selectedReport.subject_address, selectedReport.chain_id)}
+                              >
+                                Inspect
+                              </button>
+                            </span>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="kv-key">Counterparty</td>
+                          <td className="kv-val">
+                            {selectedReport.counterparty_address ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                {selectedReport.counterparty_label && (
+                                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-sans)" }}>
+                                    {selectedReport.counterparty_label}
+                                  </span>
+                                )}
+                                <a
+                                  href={getExplorerAddressUrl(selectedReport.chain_id, selectedReport.counterparty_address)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="link-muted"
+                                >
+                                  {truncateHex(selectedReport.counterparty_address, 5)} ↗
+                                </a>
+                                <button
+                                  type="button"
+                                  className="btn-copy-xs"
+                                  onClick={() => copyToClipboard(selectedReport.counterparty_address!)}
+                                >
+                                  {copiedText === selectedReport.counterparty_address ? "Copied" : "Copy"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn-copy-xs"
+                                  onClick={() =>
+                                    inspectAddress(selectedReport.counterparty_address!, selectedReport.chain_id)
+                                  }
+                                >
+                                  Inspect
+                                </button>
+                              </span>
+                            ) : (
+                              "Contract Deploy"
+                            )}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="kv-key">Value</td>
+                          <td className="kv-val">
+                            {selectedReport.tx_value_usd != null
+                              ? `$${selectedReport.tx_value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              : "$0.00"}
+                            {selectedReport.tx_value_native != null && selectedReport.tx_value_native > 0
+                              ? ` (${selectedReport.tx_value_native.toFixed(4)} ETH)`
+                              : ""}
+                          </td>
+                        </tr>
+                        {selectedReport.simulation_summary && (
+                          <tr>
+                            <td className="kv-key">EVM Simulation</td>
+                            <td className="kv-val">
+                              {selectedReport.simulation_summary.success ? "Success" : "Reverted"} · {selectedReport.simulation_summary.gas_used.toLocaleString()} gas
+                              {selectedReport.simulation_summary.permission_mutations.length > 0
+                                ? ` · ${selectedReport.simulation_summary.permission_mutations.length} approval(s)`
+                                : ""}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+
+                    <div style={{ marginBottom: 14 }}>
+                      <div className="section-heading">Rules</div>
+                      {selectedReport.heuristic_findings.length === 0 ? (
+                        <div className="rule-box" style={{ color: "var(--text-tertiary)", fontSize: 12 }}>
+                          No deterministic rule violations.
+                        </div>
+                      ) : (
+                        selectedReport.heuristic_findings.map((f, idx) => (
+                          <div key={`${f.rule_id}-${idx}`} className="rule-box is-threat">
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <strong style={{ color: "var(--text-primary)", fontSize: 12 }}>{f.title}</strong>
+                              <span className={`risk-tag risk-${f.severity.toLowerCase()}`}>{f.rule_id}</span>
+                            </div>
+                            <div style={{ color: "var(--text-secondary)", fontSize: 11.5 }}>{f.description}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ width: "100%", justifyContent: "space-between" }}
+                        onClick={() => setShowSignals(!showSignals)}
+                      >
+                        <span>Signals & Forensics</span>
+                        <span className="mono">{showSignals ? "−" : "+"}</span>
+                      </button>
+
+                      {showSignals && (
+                        <div style={{ marginTop: 8, padding: "10px 12px", background: "var(--bg-chrome)", borderRadius: 6 }}>
+                          <table className="kv-table" style={{ marginBottom: 8 }}>
+                            <tbody>
+                              <tr>
+                                <td className="kv-key">ML Score (ONNX)</td>
+                                <td className="kv-val">{(selectedReport.ensemble_breakdown.supervised_ml_signal * 100).toFixed(1)}%</td>
+                              </tr>
+                              <tr>
+                                <td className="kv-key">Anomaly</td>
+                                <td className="kv-val">{(selectedReport.ensemble_breakdown.anomaly_signal * 100).toFixed(1)}%</td>
+                              </tr>
+                              <tr>
+                                <td className="kv-key">Taint Exposure</td>
+                                <td className="kv-val">{(selectedReport.ensemble_breakdown.taint_exposure_signal * 100).toFixed(1)}%</td>
+                              </tr>
+                              <tr>
+                                <td className="kv-key">Bytecode Risk</td>
+                                <td className="kv-val">
+                                  {(selectedReport.ensemble_breakdown.bytecode_risk_signal * 100).toFixed(1)}%
+                                  {selectedReport.ml_predictions.nearest_bytecode_family
+                                    ? ` (${selectedReport.ml_predictions.nearest_bytecode_family})`
+                                    : ""}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td className="kv-key">Latency</td>
+                                <td className="kv-val">{selectedReport.total_latency_ms.toFixed(1)} ms</td>
+                              </tr>
+                            </tbody>
+                          </table>
+
+                          {selectedReport.ml_predictions.top_shap_features.length > 0 && (
+                            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--divider)" }}>
+                              <div className="section-heading" style={{ marginBottom: 4 }}>Feature Drivers</div>
+                              {selectedReport.ml_predictions.top_shap_features.slice(0, 3).map((feat) => (
+                                <div key={feat.feature_name} className="telemetry-row" style={{ padding: "2px 0" }}>
+                                  <span className="mono">{feat.feature_name}</span>
+                                  <span className="mono" style={{ color: feat.shap_impact > 0 ? "var(--warn)" : "var(--safe)" }}>
+                                    {feat.shap_impact > 0 ? "+" : ""}
+                                    {feat.shap_impact.toFixed(3)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {selectedReport.forensic_brief && (
+                            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--divider)", fontSize: 11.5, color: "var(--text-secondary)" }}>
+                              {selectedReport.forensic_brief.executive_summary}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {alertStatusById.has(selectedReport.evaluation_id) && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div className="section-heading">Alert Triage</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {[
+                            { status: "ACKNOWLEDGED", label: "Reviewed" },
+                            { status: "CONFIRMED", label: "Confirm Threat" },
+                            { status: "FALSE_POSITIVE", label: "False Positive" },
+                          ].map((opt) => {
+                            const active =
+                              alertStatusById.get(selectedReport.evaluation_id)?.triage_status === opt.status;
+                            return (
+                              <button
+                                key={opt.status}
+                                type="button"
+                                className={`btn-secondary ${active ? "active" : ""}`}
+                                style={{ height: 26, fontSize: 11.5, padding: "0 9px" }}
+                                disabled={isUpdatingAlert}
+                                onClick={() => updateAlertTriage(selectedReport.evaluation_id, opt.status)}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ width: "100%", justifyContent: "space-between" }}
+                        onClick={() => setShowDisputeForm((v) => !v)}
+                      >
+                        <span>Flag False Positive / Label</span>
+                        <span className="mono">{showDisputeForm ? "−" : "+"}</span>
+                      </button>
+
+                      {disputeFeedback && (
+                        <div className="mono" style={{ marginTop: 6, fontSize: 11.5, color: "var(--text-primary)" }}>
+                          {disputeFeedback}
+                        </div>
+                      )}
+
+                      {showDisputeForm && (
+                        <div style={{ marginTop: 8, padding: 10, background: "var(--bg-chrome)", borderRadius: 6 }}>
+                          <label className="field-label">Proposed Classification</label>
+                          <select
+                            className="select-field"
+                            style={{ width: "100%", marginBottom: 8 }}
+                            value={disputeLabel}
+                            onChange={(e) => setDisputeLabel(e.target.value)}
+                          >
+                            <option value="BenignProtocol">Benign Verified Protocol</option>
+                            <option value="SafeEOA">Legitimate User EOA</option>
+                            <option value="ConfirmedDrainer">Confirmed Phishing / Drainer</option>
+                          </select>
+
+                          <label className="field-label">Analyst Justification</label>
+                          <textarea
+                            className="textarea-field"
+                            placeholder="Explain why this verdict should be overridden..."
+                            value={disputeNotes}
+                            onChange={(e) => setDisputeNotes(e.target.value)}
+                          />
+
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              disabled={isSubmittingDispute || !disputeNotes.trim()}
+                              onClick={() =>
+                                submitDispute(
+                                  selectedReport,
+                                  selectedReport.counterparty_address || selectedReport.subject_address
+                                )
+                              }
+                            >
+                              {isSubmittingDispute ? "Submitting..." : "Submit Dispute"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
