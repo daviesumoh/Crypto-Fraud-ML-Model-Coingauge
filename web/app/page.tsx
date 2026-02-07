@@ -1506,3 +1506,217 @@ export default function CryptoRiskConsole() {
             </div>
           )}
 
+          {activeTab === "inspector" && (
+            <div style={{ maxWidth: 920 }}>
+              <div className="page-header">
+                <div>
+                  <h1 className="page-title">
+                    {inspectorMode === "address" ? "Address Inspector" : "Pre-Sign Transaction Simulator"}
+                  </h1>
+                  <div className="page-subtitle">
+                    {inspectorMode === "address"
+                      ? "Inspect EOAs or smart contracts using live Alchemy RPC state, Alchemy asset transfers, and Forta/ScamSniffer threat intel."
+                      : "Simulate raw calldata locally in revm against live RPC state to detect drains, unlimited approvals, and evasion opcodes before signing."}
+                  </div>
+                </div>
+
+                <div className="segmented-control">
+                  <button
+                    type="button"
+                    className={`segment-btn ${inspectorMode === "address" ? "active" : ""}`}
+                    onClick={() => setInspectorMode("address")}
+                  >
+                    Address Risk
+                  </button>
+                  <button
+                    type="button"
+                    className={`segment-btn ${inspectorMode === "tx" ? "active" : ""}`}
+                    onClick={() => setInspectorMode("tx")}
+                  >
+                    Pre-Sign Tx Simulator
+                  </button>
+                </div>
+              </div>
+
+              {inspectorMode === "address" ? (
+                <>
+                  <form
+                    className="inspector-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      inspectAddress();
+                    }}
+                  >
+                    <select
+                      className="select-field"
+                      value={searchChainId}
+                      onChange={(e) => setSearchChainId(Number(e.target.value))}
+                    >
+                      <option value={1}>Ethereum</option>
+                      <option value={8453}>Base</option>
+                    </select>
+
+                    <input
+                      ref={inspectorInputRef}
+                      className="input-field"
+                      placeholder="Enter 0x address (EOA or contract)"
+                      value={searchAddr}
+                      onChange={(e) => setSearchAddr(e.target.value)}
+                    />
+
+                    <button
+                      type="submit"
+                      className="btn-primary"
+                      style={{ height: 36, padding: "0 16px" }}
+                      disabled={isSearching || !searchAddr.trim()}
+                    >
+                      {isSearching ? "Querying..." : "Inspect"}
+                    </button>
+                  </form>
+
+                  {searchError && (
+                    <div style={{ color: "var(--danger)", fontSize: 12.5, marginBottom: 14 }}>
+                      {searchError}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-tertiary)", marginRight: 4 }}>Presets:</span>
+                    {[
+                      { label: "vitalik.eth", addr: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" },
+                      { label: "Uniswap Universal Router", addr: "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD" },
+                      { label: "Tornado Cash Router", addr: "0xd90e2f925DA726b50C4Ed8D0Fb90Ad053324F31b" },
+                      { label: "Lazarus Group", addr: "0x098B716B8Aaf21512996dC57EB0615e2383E2f96" },
+                      { label: "Forta Fake_Phishing3901", addr: "0x000000000532b45f47779fce440748893b257865" },
+                    ].map((item) => (
+                      <button
+                        key={item.addr}
+                        type="button"
+                        className="btn-secondary"
+                        style={{ height: 26, fontSize: 11.5, padding: "0 9px" }}
+                        onClick={() => inspectAddress(item.addr, 1)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {scannedReport && (
+                    <div className="panel-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 14, borderBottom: "1px solid var(--divider)", marginBottom: 14 }}>
+                        <div>
+                          <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 2 }}>
+                            {scannedReport.subject_label || "Unlabeled Address"} ·{" "}
+                            {scannedReport.chain_id === 8453 ? "Base" : "Ethereum"}
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <a
+                              href={getExplorerAddressUrl(scannedReport.chain_id, scannedReport.subject_address)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mono link-muted"
+                              style={{ fontSize: 14, fontWeight: 600 }}
+                            >
+                              {scannedReport.subject_address} ↗
+                            </a>
+                            <button
+                              type="button"
+                              className="btn-copy-xs"
+                              onClick={() => copyToClipboard(scannedReport.subject_address)}
+                            >
+                              {copiedText === scannedReport.subject_address ? "Copied" : "Copy"}
+                            </button>
+                          </div>
+                          <div className="mono" style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 2 }}>
+                            {scannedReport.decoded_function}
+                          </div>
+                        </div>
+
+                        <div style={{ textAlign: "right" }}>
+                          <span className={`risk-tag risk-${scannedReport.risk_tier.toLowerCase()}`}>
+                            {scannedReport.risk_score} / 100 · {scannedReport.policy_action}
+                          </span>
+                        </div>
+                      </div>
+
+                      <table className="kv-table">
+                        <tbody>
+                          <tr>
+                            <td className="kv-key">Balance</td>
+                            <td className="kv-val">
+                              {scannedReport.tx_value_native != null ? `${scannedReport.tx_value_native.toFixed(4)} ETH` : "0.0000 ETH"}
+                              {" "}
+                              (${scannedReport.tx_value_usd != null ? scannedReport.tx_value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"})
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Confidence</td>
+                            <td className="kv-val">{(scannedReport.confidence_score * 100).toFixed(0)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Taint Exposure</td>
+                            <td className="kv-val">{(scannedReport.ensemble_breakdown.taint_exposure_signal * 100).toFixed(1)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">ML Score (ONNX)</td>
+                            <td className="kv-val">{(scannedReport.ensemble_breakdown.supervised_ml_signal * 100).toFixed(1)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Anomaly Score</td>
+                            <td className="kv-val">{(scannedReport.ensemble_breakdown.anomaly_signal * 100).toFixed(1)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Bytecode Risk</td>
+                            <td className="kv-val">
+                              {(scannedReport.ensemble_breakdown.bytecode_risk_signal * 100).toFixed(1)}%
+                              {scannedReport.ml_predictions.nearest_bytecode_family
+                                ? ` (${scannedReport.ml_predictions.nearest_bytecode_family})`
+                                : ""}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Latency</td>
+                            <td className="kv-val">{scannedReport.total_latency_ms.toFixed(1)} ms</td>
+                          </tr>
+                        </tbody>
+                      </table>
+
+                      {scannedReport.ml_predictions.top_shap_features.length > 0 && (
+                        <div style={{ marginTop: 12, marginBottom: 12 }}>
+                          <div className="section-heading">ML Feature Drivers</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                            {scannedReport.ml_predictions.top_shap_features.slice(0, 4).map((feat) => (
+                              <div key={feat.feature_name} className="rule-box" style={{ marginBottom: 0 }}>
+                                <div className="telemetry-row">
+                                  <span className="mono">{feat.feature_name}</span>
+                                  <span className="mono" style={{ color: feat.shap_impact > 0 ? "var(--warn)" : "var(--safe)" }}>
+                                    {feat.shap_impact > 0 ? "+" : ""}
+                                    {feat.shap_impact.toFixed(3)}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {scannedReport.heuristic_findings.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                          <div className="section-heading">Violations</div>
+                          {scannedReport.heuristic_findings.map((f, idx) => (
+                            <div key={`${f.rule_id}-${idx}`} className="rule-box is-threat">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                <strong style={{ color: "var(--text-primary)", fontSize: 12 }}>{f.title}</strong>
+                                <span className={`risk-tag risk-${f.severity.toLowerCase()}`}>{f.rule_id}</span>
+                              </div>
+                              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>{f.description}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
