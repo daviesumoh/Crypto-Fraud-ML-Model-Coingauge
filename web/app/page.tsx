@@ -1943,3 +1943,43 @@ export default function CryptoRiskConsole() {
             </div>
           )}
 
+          {activeTab === "rules" && (
+            <div>
+              <div className="page-header">
+                <div>
+                  <h1 className="page-title">Detection Rules</h1>
+                  <div className="page-subtitle">
+                    Deterministic EVM simulation, social engineering, mempool urgency, and taint-graph heuristics active on Gateway {GATEWAY_URL.replace(/^https?:\/\//, "")}.
+                  </div>
+                </div>
+              </div>
+
+              <div className="table-card">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Rule ID</th>
+                      <th>Severity</th>
+                      <th>Name</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {HEURISTIC_RULES.map((rule) => (
+                      <tr key={rule.id} className="data-row">
+                        <td className="mono" style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+                          {rule.id}
+                        </td>
+                        <td>
+                          <span className={`risk-tag risk-${rule.severity.toLowerCase()}`}>{rule.severity}</span>
+                        </td>
+                        <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{rule.name}</td>
+                        <td style={{ color: "var(--text-secondary)" }}>{rule.desc}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
