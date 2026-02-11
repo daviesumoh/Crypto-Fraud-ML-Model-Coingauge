@@ -1720,3 +1720,226 @@ export default function CryptoRiskConsole() {
               ) : (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-tertiary)", marginRight: 4 }}>Scenarios:</span>
+                    {[
+                      {
+                        label: "Clean ETH Transfer",
+                        chainId: 1,
+                        from: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                        to: "0x28c6c06298d514db089934071355e5743bf21d60",
+                        valueEth: "0.25",
+                        calldata: "0x",
+                      },
+                      {
+                        label: "Unlimited EOA Approve (H-APP-01)",
+                        chainId: 1,
+                        from: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                        to: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        valueEth: "0",
+                        calldata:
+                          "0x095ea7b3000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                      },
+                      {
+                        label: "Tornado Cash Transfer (H-AML-01)",
+                        chainId: 1,
+                        from: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                        to: "0xd90e2f925DA726b50C4Ed8D0Fb90Ad053324F31b",
+                        valueEth: "1.0",
+                        calldata: "0x",
+                      },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="btn-secondary"
+                        style={{ height: 26, fontSize: 11.5, padding: "0 9px" }}
+                        onClick={() => {
+                          setTxChainId(preset.chainId);
+                          setTxFrom(preset.from);
+                          setTxTo(preset.to);
+                          setTxValueEth(preset.valueEth);
+                          setTxCalldata(preset.calldata);
+                          simulateTransaction(preset);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <form
+                    className="panel-card"
+                    style={{ marginBottom: 16 }}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      simulateTransaction();
+                    }}
+                  >
+                    <div className="form-grid-2" style={{ marginBottom: 10 }}>
+                      <div>
+                        <label className="field-label">Network</label>
+                        <select
+                          className="select-field"
+                          style={{ width: "100%" }}
+                          value={txChainId}
+                          onChange={(e) => setTxChainId(Number(e.target.value))}
+                        >
+                          <option value={1}>Ethereum</option>
+                          <option value={8453}>Base</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="field-label">Value (ETH)</label>
+                        <input
+                          className="input-field"
+                          style={{ width: "100%" }}
+                          value={txValueEth}
+                          onChange={(e) => setTxValueEth(e.target.value)}
+                          placeholder="0.0"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-grid-2" style={{ marginBottom: 10 }}>
+                      <div>
+                        <label className="field-label">Sender Address (from)</label>
+                        <input
+                          className="input-field"
+                          style={{ width: "100%" }}
+                          value={txFrom}
+                          onChange={(e) => setTxFrom(e.target.value)}
+                          placeholder="0x..."
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label">Recipient / Contract (to)</label>
+                        <input
+                          className="input-field"
+                          style={{ width: "100%" }}
+                          value={txTo}
+                          onChange={(e) => setTxTo(e.target.value)}
+                          placeholder="0x..."
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <label className="field-label">Calldata Hex (0x...)</label>
+                      <textarea
+                        className="textarea-field"
+                        value={txCalldata}
+                        onChange={(e) => setTxCalldata(e.target.value)}
+                        placeholder="0x"
+                      />
+                    </div>
+
+                    {simError && (
+                      <div style={{ color: "var(--danger)", fontSize: 12.5, marginBottom: 10 }}>
+                        {simError}
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        type="submit"
+                        className="btn-primary"
+                        disabled={isSimulating || !txFrom.trim()}
+                      >
+                        {isSimulating ? "Simulating in revm..." : "Simulate Pre-Sign Transaction"}
+                      </button>
+                    </div>
+                  </form>
+
+                  {simReport && (
+                    <div className="panel-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 14, borderBottom: "1px solid var(--divider)", marginBottom: 14 }}>
+                        <div>
+                          <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 2 }}>
+                            {simReport.decoded_function || "Transaction Simulation"} ·{" "}
+                            {simReport.chain_id === 8453 ? "Base" : "Ethereum"}
+                          </div>
+                          <div className="mono" style={{ fontSize: 13, color: "var(--text-primary)" }}>
+                            {simReport.subject_label || truncateHex(simReport.subject_address, 6)} →{" "}
+                            {simReport.counterparty_label ||
+                              (simReport.counterparty_address
+                                ? truncateHex(simReport.counterparty_address, 6)
+                                : "Contract Deploy")}
+                          </div>
+                        </div>
+
+                        <span className={`risk-tag risk-${simReport.risk_tier.toLowerCase()}`}>
+                          {simReport.risk_score} / 100 · {simReport.policy_action}
+                        </span>
+                      </div>
+
+                      <table className="kv-table">
+                        <tbody>
+                          {simReport.simulation_summary && (
+                            <tr>
+                              <td className="kv-key">EVM State Diff</td>
+                              <td className="kv-val">
+                                {simReport.simulation_summary.success ? "Success" : "Reverted"} ·{" "}
+                                {simReport.simulation_summary.gas_used.toLocaleString()} gas ·{" "}
+                                {simReport.simulation_summary.permission_mutations.length} approval mutation(s)
+                              </td>
+                            </tr>
+                          )}
+                          <tr>
+                            <td className="kv-key">ML Score (ONNX)</td>
+                            <td className="kv-val">{(simReport.ensemble_breakdown.supervised_ml_signal * 100).toFixed(1)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Taint Exposure</td>
+                            <td className="kv-val">{(simReport.ensemble_breakdown.taint_exposure_signal * 100).toFixed(1)}%</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Latency</td>
+                            <td className="kv-val">{simReport.total_latency_ms.toFixed(1)} ms</td>
+                          </tr>
+                        </tbody>
+                      </table>
+
+                      {simReport.simulation_summary && simReport.simulation_summary.permission_mutations.length > 0 && (
+                        <div style={{ marginTop: 10, marginBottom: 12 }}>
+                          <div className="section-heading">Decoded Permission Mutations</div>
+                          {simReport.simulation_summary.permission_mutations.map((perm, idx) => (
+                            <div key={idx} className="rule-box">
+                              <div className="telemetry-row">
+                                <span className="mono">{perm.kind}</span>
+                                <span className="mono" style={{ color: perm.is_unlimited ? "var(--danger)" : "var(--text-secondary)", fontWeight: perm.is_unlimited ? 600 : 400 }}>
+                                  {perm.is_unlimited ? "UNLIMITED" : `$${perm.allowance_usd.toFixed(2)}`}
+                                </span>
+                              </div>
+                              <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                                spender {perm.spender} on {perm.token_address}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 12 }}>
+                        <div className="section-heading">Rule Verdicts</div>
+                        {simReport.heuristic_findings.length === 0 ? (
+                          <div className="rule-box" style={{ color: "var(--text-tertiary)", fontSize: 12 }}>
+                            No deterministic rule violations.
+                          </div>
+                        ) : (
+                          simReport.heuristic_findings.map((f, idx) => (
+                            <div key={`${f.rule_id}-${idx}`} className="rule-box is-threat">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                <strong style={{ color: "var(--text-primary)", fontSize: 12 }}>{f.title}</strong>
+                                <span className={`risk-tag risk-${f.severity.toLowerCase()}`}>{f.rule_id}</span>
+                              </div>
+                              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>{f.description}</div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
