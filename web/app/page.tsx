@@ -1983,3 +1983,215 @@ export default function CryptoRiskConsole() {
             </div>
           )}
 
+          {activeTab === "chains" && (
+            <div>
+              <div className="page-header">
+                <div>
+                  <h1 className="page-title">Nodes & Models</h1>
+                  <div className="page-subtitle">
+                    Live JSON-RPC block indexers, ONNX ML sidecar telemetry, and analyst feedback disputes.
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid-2" style={{ marginBottom: 16 }}>
+                {[
+                  { label: "Ethereum Mainnet (Chain 1)", data: ethChain },
+                  { label: "Base Mainnet (Chain 8453)", data: baseChain },
+                ].map((node) => {
+                  const synced = Boolean(node.data && node.data.latest_block > 0);
+                  const offline = !streamStatus && !!streamError;
+                  const tagClass = offline ? "risk-critical" : synced ? "risk-low" : "risk-medium";
+                  const dotClass = offline ? "offline" : synced ? "" : "paused";
+                  const stateText = offline ? "Offline" : synced ? "Synced" : "Connecting";
+                  return (
+                    <div key={node.label} className="panel-card">
+                      <div className="panel-card-header">
+                        <div className="panel-card-title">{node.label}</div>
+                        <span className={`risk-tag ${tagClass}`}>
+                          <span className={`status-dot ${dotClass}`} />
+                          <span>{stateText}</span>
+                        </span>
+                      </div>
+
+                      <table className="kv-table" style={{ marginBottom: 0 }}>
+                        <tbody>
+                          <tr>
+                            <td className="kv-key">Latest Block</td>
+                            <td className="kv-val">
+                              {synced && node.data
+                                ? `#${node.data.latest_block.toLocaleString()}`
+                                : offline
+                                ? "Offline"
+                                : "Syncing..."}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">RPC Provider</td>
+                            <td className="kv-val">{node.data?.provider_type || "—"}</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Endpoint</td>
+                            <td className="kv-val">{node.data?.endpoint_masked || "—"}</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Evaluated</td>
+                            <td className="kv-val">{node.data ? node.data.txs_evaluated.toLocaleString() : "0"}</td>
+                          </tr>
+                          <tr>
+                            <td className="kv-key">Flagged</td>
+                            <td className="kv-val">{node.data ? node.data.threats_flagged.toLocaleString() : "0"}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="panel-card" style={{ marginBottom: 16 }}>
+                <div className="panel-card-header">
+                  <div className="panel-card-title">ONNX Model & Threat Intelligence</div>
+                  <span
+                    className={`risk-tag ${
+                      mlTelemetry?.onnx_active
+                        ? "risk-low"
+                        : mlTelemetry?.connected
+                        ? "risk-medium"
+                        : "risk-critical"
+                    }`}
+                  >
+                    {mlTelemetry?.onnx_active
+                      ? `ONNX Active (${mlTelemetry.model_artifact})`
+                      : mlTelemetry?.connected
+                      ? `Fallback (${mlTelemetry.model_artifact})`
+                      : "ML Sidecar Offline"}
+                  </span>
+                </div>
+
+                <table className="kv-table" style={{ marginBottom: 0 }}>
+                  <tbody>
+                    <tr>
+                      <td className="kv-key">Validation PR-AUC</td>
+                      <td className="kv-val">
+                        {mlMetrics?.temporal_holdout_pr_auc != null
+                          ? mlMetrics.temporal_holdout_pr_auc.toFixed(4)
+                          : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">FPR @ 0.55 Threshold</td>
+                      <td className="kv-val">
+                        {mlMetrics?.temporal_holdout_fpr_at_55 != null
+                          ? mlMetrics.temporal_holdout_fpr_at_55.toFixed(5)
+                          : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Calibration Error (ECE)</td>
+                      <td className="kv-val">
+                        {mlMetrics?.temporal_holdout_ece != null
+                          ? mlMetrics.temporal_holdout_ece.toFixed(4)
+                          : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Feature Drift (PSI Mean)</td>
+                      <td className="kv-val">
+                        {mlMetrics?.feature_drift_psi_mean != null
+                          ? mlMetrics.feature_drift_psi_mean.toFixed(4)
+                          : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Threat Registry</td>
+                      <td className="kv-val">
+                        {streamStatus
+                          ? `${streamStatus.threat_intel_count.toLocaleString()} indexed entities (Forta, ScamSniffer, Canonical)`
+                          : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Bytecode Signatures</td>
+                      <td className="kv-val">
+                        {mlTelemetry?.connected
+                          ? `${mlTelemetry.bytecode_signature_count.toLocaleString()} loaded opcode signatures`
+                          : "ML sidecar offline"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Verified Protocols</td>
+                      <td className="kv-val">
+                        {streamStatus ? `${streamStatus.verified_contract_count.toLocaleString()} whitelisted contracts` : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="kv-key">Analyst Disputes</td>
+                      <td className="kv-val">
+                        {streamStatus ? `${streamStatus.dispute_count.toLocaleString()} recorded` : "0"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <div className="panel-card-title">Analyst Disputes & Label Feedback</div>
+                  <button
+                    type="button"
+                    className="btn-copy-xs"
+                    onClick={() => fetchDisputes()}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {disputes.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--text-tertiary)" }}>
+                    No false-positive disputes submitted in this Gateway session. Open any transaction drawer to flag a false positive or propose a label.
+                  </div>
+                ) : (
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Chain</th>
+                          <th>Address</th>
+                          <th>Proposed Label</th>
+                          <th>Analyst Notes</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {disputes.map((d) => (
+                          <tr key={d.dispute_id} className="data-row">
+                            <td>{d.chain_id === 8453 ? "Base" : "Ethereum"}</td>
+                            <td className="mono">
+                              <button
+                                type="button"
+                                className="btn-copy-xs"
+                                onClick={() => inspectAddress(d.address, d.chain_id)}
+                              >
+                                {truncateHex(d.address, 6)}
+                              </button>
+                            </td>
+                            <td className="mono">{d.proposed_label}</td>
+                            <td style={{ color: "var(--text-secondary)" }}>{d.analyst_notes}</td>
+                            <td>
+                              <span className="risk-tag risk-medium">{d.status}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
