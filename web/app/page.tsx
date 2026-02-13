@@ -726,7 +726,7 @@ export default function CryptoRiskConsole() {
             {streamStatus ? (
               <>
                 <strong>{primaryProvider}</strong>
-                <span style={{ color: "var(--text-tertiary)" }}>Live</span>
+                <span style={{ color: "var(--text-tertiary)" }}>RPC</span>
                 {rpcStateSuffix && (
                   <>
                     <span style={{ color: "var(--text-dim)" }}>·</span>
@@ -740,7 +740,7 @@ export default function CryptoRiskConsole() {
           </div>
 
           <div className="topbar-pill mono" title="Live Chainlink ETH/USD spot reference price">
-            <span style={{ color: "var(--text-tertiary)" }}>ETH</span>
+            <span style={{ color: "var(--text-tertiary)" }}>ETH →</span>
             <strong>
               {streamStatus?.eth_price_usd
                 ? `USD ${streamStatus.eth_price_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
