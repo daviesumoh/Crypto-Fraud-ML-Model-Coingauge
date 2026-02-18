@@ -710,7 +710,12 @@ export default function CryptoRiskConsole() {
       {/* Top Global Utility Bar */}
       <header className="topbar">
         <div className="topbar-brand">
-          <span>Crypto Risk Analyzer</span>
+          <img
+            src="/coingauge-logo.png"
+            alt="CoinGauge"
+            className="brand-logo"
+          />
+          <span>CoinGauge</span>
         </div>
 
         <div className="topbar-actions">
