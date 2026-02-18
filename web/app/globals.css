@@ -1,5 +1,5 @@
 :root {
-  --bg-canvas: #0d0e11;
+  --bg-canvas: #050506;
   --bg-chrome: #050506;
   --bg-surface: #1a1a1a;
   --bg-surface-header: #242425;
@@ -68,7 +68,7 @@ pre,
   height: 48px;
   min-height: 48px;
   background: var(--bg-chrome);
-  border-bottom: 1px solid #1c1e26;
+  border-bottom: 1px solid var(--bg-surface);
   padding: 0 18px;
   display: flex;
   align-items: center;
@@ -325,7 +325,7 @@ pre,
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #1c1e26;
+  border-bottom: 1px solid var(--bg-surface);
   margin-bottom: 18px;
 }
 
