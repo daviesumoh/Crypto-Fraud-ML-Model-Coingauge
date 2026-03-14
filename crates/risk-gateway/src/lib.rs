@@ -138,7 +138,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(ml_service_url: impl Into<String>) -> Self {
         load_dotenv();
-        let data_dir = std::env::var("SENTINEL_DATA_DIR")
+        let data_dir = std::env::var("COINGAUGE_DATA_DIR")
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
@@ -434,7 +434,7 @@ async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
     let eth_price = *state.eth_price_usd.read().await;
     Json(serde_json::json!({
         "status": "ok",
-        "service": "crypto-risk-analyzer-gateway",
+        "service": "coingauge-risk-gateway",
         "eth_price_usd": eth_price,
         "evaluations_served": audit_len,
         "alerts_stored": alerts_len,
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispute_rejects_invalid_inputs_and_persists_across_reload() {
-        let dir = std::env::temp_dir().join(format!("sentinel_dispute_test_{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("coingauge_dispute_test_{}", Uuid::new_v4()));
         let state = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
         let app = build_router(state);
 
@@ -1911,7 +1911,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistent_alerts_survive_reload_and_triage_updates() {
-        let dir = std::env::temp_dir().join(format!("sentinel_alerts_test_{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("coingauge_alerts_test_{}", Uuid::new_v4()));
         let state = AppState::new_with_data_dir("http://127.0.0.1:59999", dir.clone());
         let scorer = CompositeRiskScorer::default();
         let mut threat = scorer.score(

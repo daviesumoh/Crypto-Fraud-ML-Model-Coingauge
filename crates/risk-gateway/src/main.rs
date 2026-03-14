@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_router(state);
 
     tracing::info!(
-        "Crypto Risk Analyzer Gateway listening on http://{} (ML sidecar: {})",
+        "CoinGauge Risk Gateway listening on http://{} (ML sidecar: {})",
         bind_addr,
         ml_url
     );

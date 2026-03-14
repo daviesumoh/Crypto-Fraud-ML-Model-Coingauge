@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sentinel-ml"
 version = "0.1.0"
-description = "Crypto Risk Analyzer ML sidecar: GBDT fraud classifier, SVD behavioral anomaly detector, and EVM opcode index"
+description = "CoinGauge ML sidecar: GBDT fraud classifier, SVD behavioral anomaly detector, and EVM opcode index"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [

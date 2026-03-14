@@ -1,6 +1,6 @@
-# Crypto Risk Analyzer ML Sidecar (`sentinel_ml`)
+# CoinGauge ML Sidecar (`sentinel_ml`)
 
-FastAPI inference service providing tabular fraud scoring, unsupervised anomaly detection, bytecode opcode analysis, and diagnostic summaries for Crypto Risk Analyzer:
+FastAPI inference service providing tabular fraud scoring, unsupervised anomaly detection, bytecode opcode analysis, and diagnostic summaries for CoinGauge:
 
 1. **Feature Extraction (`sentinel_ml/features/extractor.py`)**: 12-dimensional normalized transaction, wallet, contract, taint, and bytecode feature vector.
 2. **Unsupervised Anomaly Detection (`sentinel_ml/models/anomaly.py`)**: Random-hyperplane isolation cuts combined with SVD subspace reconstruction error trained on benign transactions.

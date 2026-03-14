@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "CoinGauge",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "CoinGauge - ${dirty}${activeEditorMedium}${separator}${rootName}",
+    "rust-analyzer.linkedProjects": [
+      "./Cargo.toml"
+    ],
+    "python.defaultInterpreterPath": "./ml/.venv/bin/python",
+    "python.terminal.activateEnvironment": true
+  }
+}
+

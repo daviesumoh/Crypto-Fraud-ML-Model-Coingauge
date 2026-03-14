@@ -1,3 +1,9 @@
 {
-  "rust-analyzer.linkedProjects": ["./Cargo.toml"]
+  "window.title": "CoinGauge - ${dirty}${activeEditorMedium}${separator}${rootName}",
+  "rust-analyzer.linkedProjects": [
+    "./Cargo.toml"
+  ],
+  "python.defaultInterpreterPath": "./ml/.venv/bin/python",
+  "python.terminal.activateEnvironment": true
 }
+
