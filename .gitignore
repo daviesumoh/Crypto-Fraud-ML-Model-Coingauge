@@ -1,23 +1,40 @@
 # Rust
 /target/
 Cargo.lock
+**/*.rs.bk
 
-# Runtime & local state
+# Runtime data logs
 /data/
+crates/risk-gateway/data/*.jsonl
+*.db
+*.db-wal
+*.db-shm
 
 # Python
 **/__pycache__/
 **/*.pyc
 **/.pytest_cache/
 ml/.venv/
+ml/.mypy_cache/
+ml/*.egg-info/
+ml/dist/
+ml/build/
 
 # Node & Next.js
 web/node_modules/
 web/.next/
+web/out/
+web/.turbo/
 
 # Environment and Secrets
 .env
 .env.*
 env/.env
 !env/.env.example
+
+# OS & Editor
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+
