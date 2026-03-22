@@ -63,3 +63,51 @@ Next.js 14 App Router UI styled with plain CSS variables (`web/app/globals.css`,
 - **Nodes & Models**: RPC sync health, ONNX runtime status, holdout metrics, threat/bytecode registry counts, and dispute history.
 
 ## Configuration
+
+Copy `env/.env.example` to `env/.env` and set either an Alchemy key or QuickNode RPC URLs:
+
+```env
+ALCHEMY_API_KEY=
+ETHEREUM_RPC_URL=
+BASE_RPC_URL=
+SENTINEL_GATEWAY_ADDR=0.0.0.0:8090
+SENTINEL_ML_SERVICE_URL=http://127.0.0.1:8091
+COINGAUGE_DATA_DIR=data
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
+PORT=3001
+```
+
+Without private RPC keys, the chain pollers fall back to `https://ethereum-rpc.publicnode.com` and `https://mainnet.base.org`. Note that multi-hop transfer history in **Address Inspector** relies on `alchemy_getAssetTransfers` and is skipped on non-Alchemy endpoints.
+
+## Running Locally
+
+### Prerequisites
+- Rust 1.83+ (Cargo)
+- Python 3.9+
+- Node.js 18+
+
+### 1. Start the ML Sidecar
+```bash
+cd ml
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+uvicorn sentinel_ml.server:app --host 127.0.0.1 --port 8091
+```
+
+### 2. Start the Risk Gateway
+```bash
+cargo run -p risk-gateway
+```
+
+### 3. Start the Web UI
+```bash
+cd web
+npm install
+npm run build
+npx next start -p 3001
+```
+
+Open `http://localhost:3001`.
+
+## Testing
