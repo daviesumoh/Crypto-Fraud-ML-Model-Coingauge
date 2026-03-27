@@ -111,3 +111,9 @@ npx next start -p 3001
 Open `http://localhost:3001`.
 
 ## Testing
+
+```bash
+cargo test --workspace
+cd ml && .venv/bin/pytest -v
+cd web && npm run build
+```
